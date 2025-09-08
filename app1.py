@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 # --- Safe rerun mechanism ---
 if st.session_state.get("needs_rerun", False):
     st.session_state["needs_rerun"] = False
-    st.rerun()
+    st.experimental_rerun()
 
 # --- GitHub API Setup ---
 GITHUB_TOKEN = st.secrets["github_token"]
@@ -410,4 +410,4 @@ if st.session_state["logged_in"]:
             st.write("No tickets available.")
 
 st.markdown("---")
-st.markdown("*This platform is for anonymous submissions to improve A
+st.markdown("*This platform is for anonymous submissions to improve AIKTC.*")
