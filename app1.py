@@ -208,14 +208,20 @@ if st.session_state["logged_in"]:
                             else:
                                 st.error("❌ Failed to save feedback.")
                     with col2:
-                        if st.button("Delete Feedback", key=f"fb_del_{fb['id']}"):
-                            if st.confirm(f"Are you sure you want to delete feedback #{fb['id']}?"):
+                        delete_key = f"fb_del_confirm_{fb['id']}"
+                        if st.session_state.get(delete_key, False):
+                            if st.button(f"Confirm Delete Feedback #{fb['id']}", key=f"fb_del_confirm_btn_{fb['id']}"):
                                 feedback_list = [f for f in feedback_list if f["id"] != fb["id"]]
                                 if save_feedback(feedback_list, feedback_sha):
                                     st.success("✅ Feedback deleted.")
+                                    st.session_state[delete_key] = False
                                     st.experimental_rerun()
                                 else:
                                     st.error("❌ Failed to delete feedback.")
+                        else:
+                            if st.button(f"Delete Feedback #{fb['id']}", key=f"fb_del_{fb['id']}"):
+                                st.session_state[delete_key] = True
+                                st.experimental_rerun()
         else:
             st.write("No feedback available.")
 
@@ -241,14 +247,20 @@ if st.session_state["logged_in"]:
                             else:
                                 st.error("❌ Failed to save ticket.")
                     with col2:
-                        if st.button("Delete Ticket", key=f"tk_del_{ticket['id']}"):
-                            if st.confirm(f"Are you sure you want to delete ticket #{ticket['id']}?"):
+                        delete_key = f"tk_del_confirm_{ticket['id']}"
+                        if st.session_state.get(delete_key, False):
+                            if st.button(f"Confirm Delete Ticket #{ticket['id']}", key=f"tk_del_confirm_btn_{ticket['id']}"):
                                 tickets_list = [t for t in tickets_list if t["id"] != ticket["id"]]
                                 if save_tickets(tickets_list, tickets_sha):
                                     st.success("✅ Ticket deleted.")
+                                    st.session_state[delete_key] = False
                                     st.experimental_rerun()
                                 else:
                                     st.error("❌ Failed to delete ticket.")
+                        else:
+                            if st.button(f"Delete Ticket #{ticket['id']}", key=f"tk_del_{ticket['id']}"):
+                                st.session_state[delete_key] = True
+                                st.experimental_rerun()
                     with col3:
                         if new_status == "Completed":
                             if st.button("Mark Completed & Remove", key=f"tk_comp_{ticket['id']}"):
