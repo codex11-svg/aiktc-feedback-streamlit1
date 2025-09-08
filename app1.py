@@ -5,9 +5,10 @@ import json
 from datetime import datetime, timedelta
 
 # --- Safe rerun mechanism ---
+# Changed st.experimental_rerun() to st.rerun()
 if st.session_state.get("needs_rerun", False):
     st.session_state["needs_rerun"] = False
-    st.experimental_rerun()
+    st.rerun()
 
 # --- GitHub API Setup ---
 GITHUB_TOKEN = st.secrets["github_token"]
@@ -69,8 +70,10 @@ def save_tickets(tickets_list, sha):
     return update_file_content("tickets.json", data_str, sha, "Update tickets data")
 
 def remove_old_feedback(feedback_list):
-    cutoff = datetime.utcnow() - timedelta(hours=24)
-    filtered = [fb for fb in feedback_list if datetime.strptime(fb["created_at"], "%Y-%m-%dT%H:%M:%S") > cutoff]
+    # DeprecationWarning: datetime.datetime.utcnow() is deprecated
+    # Changed to datetime.datetime.now(datetime.UTC) for future compatibility
+    cutoff = datetime.now(datetime.UTC) - timedelta(hours=24)
+    filtered = [fb for fb in feedback_list if datetime.strptime(fb["created_at"], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.UTC) > cutoff]
     return filtered
 
 # --- Initialize session state variables ---
