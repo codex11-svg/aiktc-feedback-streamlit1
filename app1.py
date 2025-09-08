@@ -7,11 +7,6 @@ import io
 import uuid
 from datetime import datetime, timedelta, timezone
 
-# --- Safe rerun mechanism ---
-if st.session_state.get("needs_rerun", False):
-    st.session_state["needs_rerun"] = False
-    st.experimental_rerun()
-
 # --- GitHub API Setup ---
 GITHUB_TOKEN = st.secrets["github_token"]
 REPO = st.secrets["repo"]
@@ -149,25 +144,26 @@ if len(new_feedback_list) < len(feedback_list):
     save_feedback(new_feedback_list, feedback_sha)
     feedback_list = new_feedback_list
 
+# --- Sidebar Login/Logout with rerun inside handlers ---
 st.sidebar.title("🔐 Admin Login")
 
-if not st.session_state["logged_in"]:
+if not st.session_state.get("logged_in", False):
     password = st.sidebar.text_input("Enter admin password:", type="password")
     if st.sidebar.button("Login"):
         if password == st.secrets["admin_password"]:
             st.session_state["logged_in"] = True
             st.session_state["login_error"] = False
             st.sidebar.success("Logged in successfully!")
-            st.session_state["needs_rerun"] = True
+            st.experimental_rerun()  # Rerun after login
         else:
             st.session_state["login_error"] = True
-    if st.session_state["login_error"]:
+    if st.session_state.get("login_error", False):
         st.sidebar.error("❌ Incorrect password. Try again.")
 else:
     st.sidebar.success("✅ Logged in as admin")
     if st.sidebar.button("Logout"):
         st.session_state["logged_in"] = False
-        st.session_state["needs_rerun"] = True
+        st.experimental_rerun()  # Rerun after logout
 
 if st.session_state["logged_in"]:
     tab_public, tab_admin = st.tabs(["Public View", "Admin Panel"])
@@ -200,8 +196,17 @@ with tab_public:
         else:
             st.error("❌ Please enter some feedback before submitting.")
 
+    # --- Search and pagination for feedback ---
+    def reset_feedback_page():
+        st.session_state.feedback_page = 0
+
     st.header("View Submitted Feedback")
-    st.text_input("Search feedback:", key="feedback_search", on_change=lambda: st.session_state.update(feedback_page=0))
+    st.text_input(
+        "Search feedback:",
+        key="feedback_search",
+        on_change=reset_feedback_page,
+        placeholder="Type to search feedback..."
+    )
     filtered_feedback = filter_items(feedback_list, st.session_state.feedback_search, ["message"])
     page_size = 5
     feedback_page = st.session_state.feedback_page
@@ -252,8 +257,17 @@ with tab_public:
         else:
             st.error("❌ Please enter a query before submitting.")
 
+    # --- Search and pagination for tickets ---
+    def reset_ticket_page():
+        st.session_state.ticket_page = 0
+
     st.header("View Tickets")
-    st.text_input("Search tickets:", key="ticket_search", on_change=lambda: st.session_state.update(ticket_page=0))
+    st.text_input(
+        "Search tickets:",
+        key="ticket_search",
+        on_change=reset_ticket_page,
+        placeholder="Type to search tickets..."
+    )
     filtered_tickets = filter_items(tickets_list, st.session_state.ticket_search, ["query"])
     ticket_page = st.session_state.ticket_page
     page_items, has_more = paginate_items(filtered_tickets, ticket_page, page_size)
@@ -304,7 +318,7 @@ if st.session_state["logged_in"]:
                             fb["message"] = edited_message.strip()
                             if save_feedback(feedback_list, feedback_sha):
                                 st.success("✅ Feedback saved.")
-                                st.session_state["needs_rerun"] = True
+                                st.experimental_rerun()
                             else:
                                 st.error("❌ Failed to save feedback.")
                     with col2:
@@ -313,16 +327,14 @@ if st.session_state["logged_in"]:
                             if st.button(f"Confirm Delete Feedback #{fb['id']}", key=f"fb_del_confirm_btn_{fb['id']}"):
                                 feedback_list = [f for f in feedback_list if f["id"] != fb["id"]]
                                 st.session_state[delete_key] = False
-                                st.session_state["needs_rerun"] = True
-                                success = save_feedback(feedback_list, feedback_sha)
-                                if success:
+                                if save_feedback(feedback_list, feedback_sha):
                                     st.success("✅ Feedback deleted.")
+                                    st.experimental_rerun()
                                 else:
                                     st.error("❌ Failed to delete feedback.")
                         else:
                             if st.button(f"Delete Feedback #{fb['id']}", key=f"fb_del_{fb['id']}"):
                                 st.session_state[delete_key] = True
-                                st.session_state["needs_rerun"] = True
                     with col3:
                         with st.form(f"fb_reply_form_{fb['id']}"):
                             reply_text = st.text_area("Write a reply to this feedback:", key=f"fb_reply_text_{fb['id']}", height=80)
@@ -336,7 +348,7 @@ if st.session_state["logged_in"]:
                                     fb.setdefault("replies", []).append(reply)
                                     if save_feedback(feedback_list, feedback_sha):
                                         st.success("✅ Reply saved.")
-                                        st.session_state["needs_rerun"] = True
+                                        st.experimental_rerun()
                                     else:
                                         st.error("❌ Failed to save reply.")
                                 else:
@@ -360,7 +372,7 @@ if st.session_state["logged_in"]:
                             ticket["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
                             if save_tickets(tickets_list, tickets_sha):
                                 st.success("✅ Ticket saved.")
-                                st.session_state["needs_rerun"] = True
+                                st.experimental_rerun()
                             else:
                                 st.error("❌ Failed to save ticket.")
                     with col2:
@@ -369,23 +381,21 @@ if st.session_state["logged_in"]:
                             if st.button(f"Confirm Delete Ticket #{ticket['id']}", key=f"tk_del_confirm_btn_{ticket['id']}"):
                                 tickets_list = [t for t in tickets_list if t["id"] != ticket["id"]]
                                 st.session_state[delete_key] = False
-                                st.session_state["needs_rerun"] = True
-                                success = save_tickets(tickets_list, tickets_sha)
-                                if success:
+                                if save_tickets(tickets_list, tickets_sha):
                                     st.success("✅ Ticket deleted.")
+                                    st.experimental_rerun()
                                 else:
                                     st.error("❌ Failed to delete ticket.")
                         else:
                             if st.button(f"Delete Ticket #{ticket['id']}", key=f"tk_del_{ticket['id']}"):
                                 st.session_state[delete_key] = True
-                                st.session_state["needs_rerun"] = True
                     with col3:
                         if new_status == "Completed":
                             if st.button("Mark Completed & Remove", key=f"tk_comp_{ticket['id']}"):
                                 tickets_list = [t for t in tickets_list if t["id"] != ticket["id"]]
                                 if save_tickets(tickets_list, tickets_sha):
                                     st.success("✅ Ticket marked completed and removed from public view.")
-                                    st.session_state["needs_rerun"] = True
+                                    st.experimental_rerun()
                                 else:
                                     st.error("❌ Failed to update ticket.")
                     with col4:
@@ -401,7 +411,7 @@ if st.session_state["logged_in"]:
                                     ticket.setdefault("replies", []).append(reply)
                                     if save_tickets(tickets_list, tickets_sha):
                                         st.success("✅ Reply saved.")
-                                        st.session_state["needs_rerun"] = True
+                                        st.experimental_rerun()
                                     else:
                                         st.error("❌ Failed to save reply.")
                                 else:
