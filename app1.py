@@ -4,6 +4,7 @@ import base64
 import json
 from datetime import datetime, timedelta
 
+# Load secrets
 GITHUB_TOKEN = st.secrets["github_token"]
 REPO = st.secrets["repo"]
 BRANCH = st.secrets.get("branch", "main")
@@ -67,18 +68,27 @@ def remove_old_feedback(feedback_list):
     filtered = [fb for fb in feedback_list if datetime.strptime(fb["created_at"], "%Y-%m-%dT%H:%M:%S") > cutoff]
     return filtered
 
+# --- Streamlit UI ---
+
 st.set_page_config(page_title="AIKTC Anonymous Feedback", page_icon="📝", layout="wide")
 st.title("📝 AIKTC Anonymous Feedback System")
 st.markdown("Submit your feedback or queries anonymously. Your identity remains protected.")
 
+# Load feedback data
 feedback_list, feedback_sha = load_feedback()
-tickets_list, tickets_sha = load_tickets()
 
+# Load tickets data and manage SHA in session_state
+tickets_list, sha = load_tickets()
+if "tickets_sha" not in st.session_state:
+    st.session_state["tickets_sha"] = sha
+
+# Remove feedback older than 24 hours
 new_feedback_list = remove_old_feedback(feedback_list)
 if len(new_feedback_list) < len(feedback_list):
     save_feedback(new_feedback_list, feedback_sha)
     feedback_list = new_feedback_list
 
+# --- Feedback submission ---
 st.header("Anonymous Feedback")
 with st.form("feedback_form"):
     feedback_message = st.text_area("Write your feedback here:", "", height=100)
@@ -94,12 +104,12 @@ if submitted_feedback:
         feedback_list.append(new_fb)
         if save_feedback(feedback_list, feedback_sha):
             st.success("✅ Feedback submitted successfully!")
-            feedback_sha = None
         else:
             st.error("❌ Failed to save feedback.")
     else:
         st.error("❌ Please enter some feedback before submitting.")
 
+# --- Display feedback ---
 st.header("View Submitted Feedback")
 if feedback_list:
     for fb in sorted(feedback_list, key=lambda x: x["created_at"], reverse=True):
@@ -108,6 +118,7 @@ if feedback_list:
 else:
     st.write("No feedback submitted yet.")
 
+# --- Ticket submission ---
 st.header("Submit a Ticket/Query")
 with st.form("ticket_form"):
     ticket_query = st.text_area("Write your query here:", "", height=100)
@@ -124,14 +135,17 @@ if submitted_ticket:
             "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         }
         tickets_list.append(new_ticket)
-        if save_tickets(tickets_list, tickets_sha):
+        if save_tickets(tickets_list, st.session_state["tickets_sha"]):
             st.success("✅ Ticket submitted successfully!")
-            tickets_sha = None
+            # Reload SHA after save
+            _, new_sha = load_tickets()
+            st.session_state["tickets_sha"] = new_sha
         else:
             st.error("❌ Failed to save ticket.")
     else:
         st.error("❌ Please enter a query before submitting.")
 
+# --- View and update tickets ---
 st.header("View and Update Tickets")
 if tickets_list:
     for ticket in sorted(tickets_list, key=lambda x: x["created_at"], reverse=True):
@@ -143,12 +157,18 @@ if tickets_list:
                 if st.button("Update", key=f"update_{ticket['id']}"):
                     ticket["status"] = new_status
                     ticket["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-                    if save_tickets(tickets_list, tickets_sha):
-                        st.success("✅ Status updated!")
-                        tickets_sha = None
-                        st.experimental_rerun()
-                    else:
-                        st.error("❌ Failed to update ticket.")
+                    try:
+                        success = save_tickets(tickets_list, st.session_state["tickets_sha"])
+                        if success:
+                            st.success("✅ Status updated!")
+                            # Reload SHA after save
+                            _, new_sha = load_tickets()
+                            st.session_state["tickets_sha"] = new_sha
+                            st.experimental_rerun()
+                        else:
+                            st.error("❌ Failed to update ticket.")
+                    except Exception as e:
+                        st.error(f"❌ Exception during update: {e}")
 else:
     st.write("No tickets submitted yet.")
 
