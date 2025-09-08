@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import base64
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone  # timezone imported
 
 # --- Safe rerun mechanism ---
 # Changed st.experimental_rerun() to st.rerun()
@@ -70,10 +70,11 @@ def save_tickets(tickets_list, sha):
     return update_file_content("tickets.json", data_str, sha, "Update tickets data")
 
 def remove_old_feedback(feedback_list):
-    # DeprecationWarning: datetime.datetime.utcnow() is deprecated
-    # Changed to datetime.datetime.now(datetime.UTC) for future compatibility
-    cutoff = datetime.now(datetime.UTC) - timedelta(hours=24)
-    filtered = [fb for fb in feedback_list if datetime.strptime(fb["created_at"], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.UTC) > cutoff]
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    filtered = [
+        fb for fb in feedback_list
+        if datetime.strptime(fb["created_at"], "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc) > cutoff
+    ]
     return filtered
 
 # --- Initialize session state variables ---
@@ -140,7 +141,7 @@ with tab_public:
             new_fb = {
                 "id": (max([fb["id"] for fb in feedback_list]) + 1) if feedback_list else 1,
                 "message": feedback_message.strip(),
-                "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
             }
             feedback_list.append(new_fb)
             if save_feedback(feedback_list, feedback_sha):
@@ -172,8 +173,8 @@ with tab_public:
                 "id": new_id,
                 "query": ticket_query.strip(),
                 "status": "In Process",
-                "created_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S"),
-                "updated_at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
             }
             tickets_list.append(new_ticket)
             if save_tickets(tickets_list, st.session_state["tickets_sha"]):
@@ -255,7 +256,7 @@ if st.session_state["logged_in"]:
                             if st.button("Save Ticket", key=f"tk_save_{ticket['id']}"):
                                 ticket["query"] = edited_query.strip()
                                 ticket["status"] = new_status
-                                ticket["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
+                                ticket["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
                                 if save_tickets(tickets_list, tickets_sha):
                                     st.success("✅ Ticket saved.")
                                     st.session_state["needs_rerun"] = True
