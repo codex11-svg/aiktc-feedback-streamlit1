@@ -4,6 +4,11 @@ import base64
 import json
 from datetime import datetime, timedelta
 
+# --- Safe rerun mechanism ---
+if st.session_state.get("needs_rerun", False):
+    st.session_state["needs_rerun"] = False
+    st.experimental_rerun()
+
 # --- GitHub API Setup ---
 GITHUB_TOKEN = st.secrets["github_token"]
 REPO = st.secrets["repo"]
@@ -102,7 +107,7 @@ if not st.session_state["logged_in"]:
             st.session_state["logged_in"] = True
             st.session_state["login_error"] = False
             st.sidebar.success("Logged in successfully!")
-            st.experimental_rerun()
+            st.session_state["needs_rerun"] = True
         else:
             st.session_state["login_error"] = True
     if st.session_state["login_error"]:
@@ -111,7 +116,7 @@ else:
     st.sidebar.success("✅ Logged in as admin")
     if st.sidebar.button("Logout"):
         st.session_state["logged_in"] = False
-        st.experimental_rerun()
+        st.session_state["needs_rerun"] = True
 
 # --- Tabs for Public and Admin views ---
 if st.session_state["logged_in"]:
@@ -211,7 +216,7 @@ if st.session_state["logged_in"]:
                                 fb["message"] = edited_message.strip()
                                 if save_feedback(feedback_list, feedback_sha):
                                     st.success("✅ Feedback saved.")
-                                    st.experimental_rerun()
+                                    st.session_state["needs_rerun"] = True
                                 else:
                                     st.error("❌ Failed to save feedback.")
                         with col2:
@@ -222,13 +227,13 @@ if st.session_state["logged_in"]:
                                     if save_feedback(feedback_list, feedback_sha):
                                         st.success("✅ Feedback deleted.")
                                         st.session_state[delete_key] = False
-                                        st.experimental_rerun()
+                                        st.session_state["needs_rerun"] = True
                                     else:
                                         st.error("❌ Failed to delete feedback.")
                             else:
                                 if st.button(f"Delete Feedback #{fb['id']}", key=f"fb_del_{fb['id']}"):
                                     st.session_state[delete_key] = True
-                                    st.experimental_rerun()
+                                    st.session_state["needs_rerun"] = True
             else:
                 st.write("No feedback available.")
 
@@ -250,7 +255,7 @@ if st.session_state["logged_in"]:
                                 ticket["updated_at"] = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
                                 if save_tickets(tickets_list, tickets_sha):
                                     st.success("✅ Ticket saved.")
-                                    st.experimental_rerun()
+                                    st.session_state["needs_rerun"] = True
                                 else:
                                     st.error("❌ Failed to save ticket.")
                         with col2:
@@ -261,20 +266,20 @@ if st.session_state["logged_in"]:
                                     if save_tickets(tickets_list, tickets_sha):
                                         st.success("✅ Ticket deleted.")
                                         st.session_state[delete_key] = False
-                                        st.experimental_rerun()
+                                        st.session_state["needs_rerun"] = True
                                     else:
                                         st.error("❌ Failed to delete ticket.")
                             else:
                                 if st.button(f"Delete Ticket #{ticket['id']}", key=f"tk_del_{ticket['id']}"):
                                     st.session_state[delete_key] = True
-                                    st.experimental_rerun()
+                                    st.session_state["needs_rerun"] = True
                         with col3:
                             if new_status == "Completed":
                                 if st.button("Mark Completed & Remove", key=f"tk_comp_{ticket['id']}"):
                                     tickets_list = [t for t in tickets_list if t["id"] != ticket["id"]]
                                     if save_tickets(tickets_list, tickets_sha):
                                         st.success("✅ Ticket marked completed and removed from public view.")
-                                        st.experimental_rerun()
+                                        st.session_state["needs_rerun"] = True
                                     else:
                                         st.error("❌ Failed to update ticket.")
 
