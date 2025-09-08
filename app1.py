@@ -56,7 +56,6 @@ def update_file_content(path, data_str, sha, commit_message):
 def load_feedback():
     data_str, sha = get_file_content("feedback.json")
     feedback_list = json.loads(data_str)
-    # Ensure replies field exists
     for fb in feedback_list:
         if "replies" not in fb:
             fb["replies"] = []
@@ -65,7 +64,6 @@ def load_feedback():
 def load_tickets():
     data_str, sha = get_file_content("tickets.json")
     tickets_list = json.loads(data_str)
-    # Ensure replies field exists
     for tk in tickets_list:
         if "replies" not in tk:
             tk["replies"] = []
@@ -114,7 +112,6 @@ def convert_to_csv(data, fields):
     writer = csv.DictWriter(output, fieldnames=fields)
     writer.writeheader()
     for row in data:
-        # Flatten replies count for CSV
         row_copy = row.copy()
         row_copy["replies_count"] = len(row_copy.get("replies", []))
         writer.writerow({k: row_copy.get(k, "") for k in fields})
@@ -142,20 +139,16 @@ st.set_page_config(page_title="AIKTC Anonymous Feedback", page_icon="📝", layo
 st.title("📝 AIKTC Anonymous Feedback System")
 st.markdown("Submit your feedback or queries anonymously. Your identity remains protected.")
 
-# Generate anonymous session ID
 anon_session_id = generate_session_id()
 
-# Load data
 feedback_list, feedback_sha = load_feedback()
 tickets_list, _ = load_tickets()
 
-# Remove feedback older than 24 hours
 new_feedback_list = remove_old_feedback(feedback_list)
 if len(new_feedback_list) < len(feedback_list):
     save_feedback(new_feedback_list, feedback_sha)
     feedback_list = new_feedback_list
 
-# --- Sidebar Admin Login ---
 st.sidebar.title("🔐 Admin Login")
 
 if not st.session_state["logged_in"]:
@@ -176,15 +169,12 @@ else:
         st.session_state["logged_in"] = False
         st.session_state["needs_rerun"] = True
 
-# --- Tabs for Public and Admin views ---
 if st.session_state["logged_in"]:
     tab_public, tab_admin = st.tabs(["Public View", "Admin Panel"])
 else:
-    tab_public = st.container()  # just a container for public view
+    tab_public = st.container()
 
-# --- PUBLIC VIEW ---
 with tab_public:
-    # --- Public Feedback Submission ---
     st.header("Anonymous Feedback")
     with st.form("feedback_form"):
         feedback_message = st.text_area("Write your feedback here:", "", height=100)
@@ -192,7 +182,6 @@ with tab_public:
 
     if submitted_feedback:
         if feedback_message.strip():
-            # Prevent duplicate submission in same session
             if st.session_state.get("last_feedback_msg", "") == feedback_message.strip():
                 st.warning("You have already submitted this feedback in this session.")
             else:
@@ -211,7 +200,6 @@ with tab_public:
         else:
             st.error("❌ Please enter some feedback before submitting.")
 
-    # --- Public Feedback Display with Search and Pagination ---
     st.header("View Submitted Feedback")
     st.text_input("Search feedback:", key="feedback_search", on_change=lambda: st.session_state.update(feedback_page=0))
     filtered_feedback = filter_items(feedback_list, st.session_state.feedback_search, ["message"])
@@ -234,7 +222,6 @@ with tab_public:
         if st.button("Load more feedback"):
             st.session_state.feedback_page += 1
 
-    # --- Public Ticket Submission ---
     st.header("Submit a Ticket/Query")
     with st.form("ticket_form"):
         ticket_query = st.text_area("Write your query here:", "", height=100)
@@ -265,7 +252,6 @@ with tab_public:
         else:
             st.error("❌ Please enter a query before submitting.")
 
-    # --- Public Ticket Display with Search and Pagination ---
     st.header("View Tickets")
     st.text_input("Search tickets:", key="ticket_search", on_change=lambda: st.session_state.update(ticket_page=0))
     filtered_tickets = filter_items(tickets_list, st.session_state.ticket_search, ["query"])
@@ -289,17 +275,14 @@ with tab_public:
         if st.button("Load more tickets"):
             st.session_state.ticket_page += 1
 
-# --- ADMIN PANEL ---
 if st.session_state["logged_in"]:
     with tab_admin:
         st.header("🛠️ Admin Panel - Manage Feedback and Tickets")
 
-        # Reload fresh data and SHAs for admin actions
         feedback_list, feedback_sha = load_feedback()
         tickets_list, tickets_sha = load_tickets()
         st.session_state["tickets_sha"] = tickets_sha
 
-        # --- Export Data ---
         st.subheader("Export Data")
         if st.button("Export Feedback as CSV"):
             csv_data = convert_to_csv(feedback_list, ["id", "message", "created_at", "replies_count"])
@@ -310,7 +293,6 @@ if st.session_state["logged_in"]:
 
         st.markdown("---")
 
-        # --- Feedback Management ---
         st.subheader("Feedback Management")
         if feedback_list:
             for fb in sorted(feedback_list, key=lambda x: x["created_at"], reverse=True):
@@ -342,7 +324,6 @@ if st.session_state["logged_in"]:
                                 st.session_state[delete_key] = True
                                 st.session_state["needs_rerun"] = True
                     with col3:
-                        # Admin reply form
                         with st.form(f"fb_reply_form_{fb['id']}"):
                             reply_text = st.text_area("Write a reply to this feedback:", key=f"fb_reply_text_{fb['id']}", height=80)
                             submitted_reply = st.form_submit_button("Submit Reply")
@@ -360,13 +341,11 @@ if st.session_state["logged_in"]:
                                         st.error("❌ Failed to save reply.")
                                 else:
                                     st.error("❌ Reply cannot be empty.")
-
         else:
             st.write("No feedback available.")
 
         st.markdown("---")
 
-        # --- Ticket Management ---
         st.subheader("Ticket Management")
         if tickets_list:
             for ticket in sorted(tickets_list, key=lambda x: x["created_at"], reverse=True):
@@ -401,3 +380,34 @@ if st.session_state["logged_in"]:
                                 st.session_state[delete_key] = True
                                 st.session_state["needs_rerun"] = True
                     with col3:
+                        if new_status == "Completed":
+                            if st.button("Mark Completed & Remove", key=f"tk_comp_{ticket['id']}"):
+                                tickets_list = [t for t in tickets_list if t["id"] != ticket["id"]]
+                                if save_tickets(tickets_list, tickets_sha):
+                                    st.success("✅ Ticket marked completed and removed from public view.")
+                                    st.session_state["needs_rerun"] = True
+                                else:
+                                    st.error("❌ Failed to update ticket.")
+                    with col4:
+                        with st.form(f"tk_reply_form_{ticket['id']}"):
+                            reply_text = st.text_area("Write a reply to this ticket:", key=f"tk_reply_text_{ticket['id']}", height=80)
+                            submitted_reply = st.form_submit_button("Submit Reply")
+                            if submitted_reply:
+                                if reply_text.strip():
+                                    reply = {
+                                        "message": reply_text.strip(),
+                                        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                                    }
+                                    ticket.setdefault("replies", []).append(reply)
+                                    if save_tickets(tickets_list, tickets_sha):
+                                        st.success("✅ Reply saved.")
+                                        st.session_state["needs_rerun"] = True
+                                    else:
+                                        st.error("❌ Failed to save reply.")
+                                else:
+                                    st.error("❌ Reply cannot be empty.")
+        else:
+            st.write("No tickets available.")
+
+st.markdown("---")
+st.markdown("*This platform is for anonymous submissions to improve A
