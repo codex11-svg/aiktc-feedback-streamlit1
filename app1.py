@@ -54,6 +54,8 @@ def load_feedback():
     for fb in feedback_list:
         if "replies" not in fb:
             fb["replies"] = []
+        if "votes" not in fb:
+            fb["votes"] = 0
     return feedback_list, sha
 
 def load_tickets():
@@ -62,6 +64,12 @@ def load_tickets():
     for tk in tickets_list:
         if "replies" not in tk:
             tk["replies"] = []
+        if "votes" not in tk:
+            tk["votes"] = 0
+        if "priority" not in tk:
+            tk["priority"] = "Medium"
+        if "attachments" not in tk:
+            tk["attachments"] = []
     return tickets_list, sha
 
 def save_feedback(feedback_list, sha):
@@ -85,16 +93,27 @@ def generate_session_id():
         st.session_state["anon_session_id"] = str(uuid.uuid4())
     return st.session_state["anon_session_id"]
 
-def filter_items(items, keyword, fields):
-    if not keyword:
+def filter_items(items, keyword, fields, category=None, status=None, priority=None):
+    if not keyword and not category and not status and not priority:
         return items
-    keyword_lower = keyword.lower()
+    keyword_lower = keyword.lower() if keyword else None
     filtered = []
     for item in items:
-        for field in fields:
-            if field in item and keyword_lower in item[field].lower():
-                filtered.append(item)
-                break
+        if category and item.get("category", "") != category:
+            continue
+        if status and item.get("status", "") != status:
+            continue
+        if priority and item.get("priority", "") != priority:
+            continue
+        if keyword_lower:
+            matched = False
+            for field in fields:
+                if field in item and keyword_lower in item[field].lower():
+                    matched = True
+                    break
+            if not matched:
+                continue
+        filtered.append(item)
     return filtered
 
 def paginate_items(items, page, page_size):
@@ -127,6 +146,20 @@ if "feedback_search" not in st.session_state:
     st.session_state["feedback_search"] = ""
 if "ticket_search" not in st.session_state:
     st.session_state["ticket_search"] = ""
+if "feedback_category" not in st.session_state:
+    st.session_state["feedback_category"] = "All"
+if "ticket_category" not in st.session_state:
+    st.session_state["ticket_category"] = "All"
+if "ticket_status" not in st.session_state:
+    st.session_state["ticket_status"] = "All"
+if "ticket_priority" not in st.session_state:
+    st.session_state["ticket_priority"] = "All"
+
+# --- Constants ---
+FEEDBACK_CATEGORIES = ["All", "Academics", "Infrastructure", "Events", "Other"]
+TICKET_CATEGORIES = ["All", "Academics", "Infrastructure", "Events", "Other"]
+TICKET_STATUSES = ["All", "In Process", "Completed"]
+TICKET_PRIORITIES = ["All", "Low", "Medium", "High"]
 
 # --- Streamlit UI ---
 
@@ -174,6 +207,7 @@ with tab_public:
     st.header("Anonymous Feedback")
     with st.form("feedback_form"):
         feedback_message = st.text_area("Write your feedback here:", "", height=100)
+        feedback_category = st.selectbox("Select category:", FEEDBACK_CATEGORIES[1:])
         submitted_feedback = st.form_submit_button("Submit Feedback")
 
     if submitted_feedback:
@@ -184,8 +218,10 @@ with tab_public:
                 new_fb = {
                     "id": (max([fb["id"] for fb in feedback_list]) + 1) if feedback_list else 1,
                     "message": feedback_message.strip(),
+                    "category": feedback_category,
                     "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-                    "replies": []
+                    "replies": [],
+                    "votes": 0
                 }
                 feedback_list.append(new_fb)
                 if save_feedback(feedback_list, feedback_sha):
@@ -201,25 +237,52 @@ with tab_public:
         st.session_state.feedback_page = 0
 
     st.header("View Submitted Feedback")
-    st.text_input(
-        "Search feedback:",
-        key="feedback_search",
-        on_change=reset_feedback_page,
-        placeholder="Type to search feedback..."
+    col1, col2 = st.columns([3,1])
+    with col1:
+        st.text_input(
+            "Search feedback:",
+            key="feedback_search",
+            on_change=reset_feedback_page,
+            placeholder="Type to search feedback..."
+        )
+    with col2:
+        st.selectbox(
+            "Category filter:",
+            FEEDBACK_CATEGORIES,
+            key="feedback_category",
+            on_change=reset_feedback_page
+        )
+
+    filtered_feedback = filter_items(
+        feedback_list,
+        st.session_state.feedback_search,
+        ["message"],
+        category=None if st.session_state.feedback_category == "All" else st.session_state.feedback_category
     )
-    filtered_feedback = filter_items(feedback_list, st.session_state.feedback_search, ["message"])
     page_size = 5
     feedback_page = st.session_state.feedback_page
     page_items, has_more = paginate_items(filtered_feedback, feedback_page, page_size)
 
     if page_items:
         for fb in sorted(page_items, key=lambda x: x["created_at"], reverse=True):
-            with st.expander(f"Feedback #{fb['id']} (Submitted: {fb['created_at']} UTC)"):
+            with st.expander(f"Feedback #{fb['id']} (Category: {fb.get('category','')}, Votes: {fb.get('votes',0)}) - Submitted: {fb['created_at']} UTC"):
                 st.write(fb["message"])
                 if fb.get("replies"):
                     st.markdown("**Admin Replies:**")
                     for reply in fb["replies"]:
                         st.markdown(f"- {reply['message']} (at {reply['created_at']} UTC)")
+                # Voting buttons
+                col_up, col_down = st.columns([1,1])
+                with col_up:
+                    if st.button(f"👍 Upvote Feedback #{fb['id']}", key=f"fb_upvote_{fb['id']}"):
+                        fb["votes"] = fb.get("votes", 0) + 1
+                        save_feedback(feedback_list, feedback_sha)
+                        st.experimental_rerun()
+                with col_down:
+                    if st.button(f"👎 Downvote Feedback #{fb['id']}", key=f"fb_downvote_{fb['id']}"):
+                        fb["votes"] = max(fb.get("votes", 0) - 1, 0)
+                        save_feedback(feedback_list, feedback_sha)
+                        st.experimental_rerun()
     else:
         st.write("No feedback submitted yet.")
 
@@ -230,6 +293,9 @@ with tab_public:
     st.header("Submit a Ticket/Query")
     with st.form("ticket_form"):
         ticket_query = st.text_area("Write your query here:", "", height=100)
+        ticket_category = st.selectbox("Select category:", TICKET_CATEGORIES[1:])
+        ticket_priority = st.selectbox("Select priority:", TICKET_PRIORITIES[1:], index=1)
+        ticket_file = st.file_uploader("Attach a file (optional)", type=["png", "jpg", "jpeg", "pdf", "txt"])
         submitted_ticket = st.form_submit_button("Submit Ticket")
 
     if submitted_ticket:
@@ -238,13 +304,27 @@ with tab_public:
                 st.warning("You have already submitted this ticket in this session.")
             else:
                 new_id = (max([t["id"] for t in tickets_list]) + 1) if tickets_list else 1
+                attachments = []
+                if ticket_file is not None:
+                    # Save file content as base64 string
+                    file_content = ticket_file.read()
+                    encoded_file = base64.b64encode(file_content).decode()
+                    attachments.append({
+                        "filename": ticket_file.name,
+                        "content_base64": encoded_file,
+                        "type": ticket_file.type
+                    })
                 new_ticket = {
                     "id": new_id,
                     "query": ticket_query.strip(),
+                    "category": ticket_category,
+                    "priority": ticket_priority,
                     "status": "In Process",
                     "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
                     "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-                    "replies": []
+                    "replies": [],
+                    "votes": 0,
+                    "attachments": attachments
                 }
                 tickets_list.append(new_ticket)
                 if save_tickets(tickets_list, st.session_state["tickets_sha"]):
@@ -262,26 +342,74 @@ with tab_public:
         st.session_state.ticket_page = 0
 
     st.header("View Tickets")
-    st.text_input(
-        "Search tickets:",
-        key="ticket_search",
-        on_change=reset_ticket_page,
-        placeholder="Type to search tickets..."
+    col1, col2, col3, col4 = st.columns([3,1,1,1])
+    with col1:
+        st.text_input(
+            "Search tickets:",
+            key="ticket_search",
+            on_change=reset_ticket_page,
+            placeholder="Type to search tickets..."
+        )
+    with col2:
+        st.selectbox(
+            "Category filter:",
+            TICKET_CATEGORIES,
+            key="ticket_category",
+            on_change=reset_ticket_page
+        )
+    with col3:
+        st.selectbox(
+            "Status filter:",
+            TICKET_STATUSES,
+            key="ticket_status",
+            on_change=reset_ticket_page
+        )
+    with col4:
+        st.selectbox(
+            "Priority filter:",
+            TICKET_PRIORITIES,
+            key="ticket_priority",
+            on_change=reset_ticket_page
+        )
+
+    filtered_tickets = filter_items(
+        tickets_list,
+        st.session_state.ticket_search,
+        ["query"],
+        category=None if st.session_state.ticket_category == "All" else st.session_state.ticket_category,
+        status=None if st.session_state.ticket_status == "All" else st.session_state.ticket_status,
+        priority=None if st.session_state.ticket_priority == "All" else st.session_state.ticket_priority
     )
-    filtered_tickets = filter_items(tickets_list, st.session_state.ticket_search, ["query"])
     ticket_page = st.session_state.ticket_page
     page_items, has_more = paginate_items(filtered_tickets, ticket_page, page_size)
 
     if page_items:
         for ticket in sorted(page_items, key=lambda x: x["created_at"], reverse=True):
             if ticket["status"] != "Completed":
-                with st.expander(f"Ticket #{ticket['id']} - {ticket['status']} (Created: {ticket['created_at']} UTC)"):
+                with st.expander(f"Ticket #{ticket['id']} - {ticket['status']} - Priority: {ticket.get('priority','Medium')} - Votes: {ticket.get('votes',0)} (Created: {ticket['created_at']} UTC)"):
                     st.write(f"**Query:** {ticket['query']}")
+                    st.write(f"Category: {ticket.get('category','')}")
                     st.write(f"Last Updated: {ticket['updated_at']} UTC")
+                    if ticket.get("attachments"):
+                        st.markdown("**Attachments:**")
+                        for att in ticket["attachments"]:
+                            st.markdown(f"- {att['filename']} ({att['type']})")
                     if ticket.get("replies"):
                         st.markdown("**Admin Replies:**")
                         for reply in ticket["replies"]:
                             st.markdown(f"- {reply['message']} (at {reply['created_at']} UTC)")
+                    # Voting buttons
+                    col_up, col_down = st.columns([1,1])
+                    with col_up:
+                        if st.button(f"👍 Upvote Ticket #{ticket['id']}", key=f"tk_upvote_{ticket['id']}"):
+                            ticket["votes"] = ticket.get("votes", 0) + 1
+                            save_tickets(tickets_list, st.session_state["tickets_sha"])
+                            st.experimental_rerun()
+                    with col_down:
+                        if st.button(f"👎 Downvote Ticket #{ticket['id']}", key=f"tk_downvote_{ticket['id']}"):
+                            ticket["votes"] = max(ticket.get("votes", 0) - 1, 0)
+                            save_tickets(tickets_list, st.session_state["tickets_sha"])
+                            st.experimental_rerun()
     else:
         st.write("No tickets submitted yet.")
 
@@ -299,125 +427,5 @@ if st.session_state["logged_in"]:
 
         st.subheader("Export Data")
         if st.button("Export Feedback as CSV"):
-            csv_data = convert_to_csv(feedback_list, ["id", "message", "created_at", "replies_count"])
-            st.download_button("Download Feedback CSV", csv_data, "feedback.csv", "text/csv")
-        if st.button("Export Tickets as CSV"):
-            csv_data = convert_to_csv(tickets_list, ["id", "query", "status", "created_at", "updated_at", "replies_count"])
-            st.download_button("Download Tickets CSV", csv_data, "tickets.csv", "text/csv")
-
-        st.markdown("---")
-
-        st.subheader("Feedback Management")
-        if feedback_list:
-            for fb in sorted(feedback_list, key=lambda x: x["created_at"], reverse=True):
-                with st.expander(f"Feedback #{fb['id']} (Submitted: {fb['created_at']} UTC)", expanded=False):
-                    edited_message = st.text_area("Edit feedback message:", fb["message"], key=f"fb_edit_{fb['id']}")
-                    col1, col2, col3 = st.columns([1,1,2])
-                    with col1:
-                        if st.button("Save Feedback", key=f"fb_save_{fb['id']}"):
-                            fb["message"] = edited_message.strip()
-                            if save_feedback(feedback_list, feedback_sha):
-                                st.success("✅ Feedback saved.")
-                                st.experimental_rerun()
-                            else:
-                                st.error("❌ Failed to save feedback.")
-                    with col2:
-                        delete_key = f"fb_del_confirm_{fb['id']}"
-                        if st.session_state.get(delete_key, False):
-                            if st.button(f"Confirm Delete Feedback #{fb['id']}", key=f"fb_del_confirm_btn_{fb['id']}"):
-                                feedback_list = [f for f in feedback_list if f["id"] != fb["id"]]
-                                st.session_state[delete_key] = False
-                                if save_feedback(feedback_list, feedback_sha):
-                                    st.success("✅ Feedback deleted.")
-                                    st.experimental_rerun()
-                                else:
-                                    st.error("❌ Failed to delete feedback.")
-                        else:
-                            if st.button(f"Delete Feedback #{fb['id']}", key=f"fb_del_{fb['id']}"):
-                                st.session_state[delete_key] = True
-                    with col3:
-                        with st.form(f"fb_reply_form_{fb['id']}"):
-                            reply_text = st.text_area("Write a reply to this feedback:", key=f"fb_reply_text_{fb['id']}", height=80)
-                            submitted_reply = st.form_submit_button("Submit Reply")
-                            if submitted_reply:
-                                if reply_text.strip():
-                                    reply = {
-                                        "message": reply_text.strip(),
-                                        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                                    }
-                                    fb.setdefault("replies", []).append(reply)
-                                    if save_feedback(feedback_list, feedback_sha):
-                                        st.success("✅ Reply saved.")
-                                        st.experimental_rerun()
-                                    else:
-                                        st.error("❌ Failed to save reply.")
-                                else:
-                                    st.error("❌ Reply cannot be empty.")
-        else:
-            st.write("No feedback available.")
-
-        st.markdown("---")
-
-        st.subheader("Ticket Management")
-        if tickets_list:
-            for ticket in sorted(tickets_list, key=lambda x: x["created_at"], reverse=True):
-                with st.expander(f"Ticket #{ticket['id']} - {ticket['status']} (Created: {ticket['created_at']} UTC)", expanded=False):
-                    edited_query = st.text_area("Edit ticket query:", ticket["query"], key=f"tk_edit_{ticket['id']}")
-                    new_status = st.selectbox("Update Status:", ["In Process", "Completed"], index=0 if ticket["status"]=="In Process" else 1, key=f"tk_status_{ticket['id']}")
-                    col1, col2, col3, col4 = st.columns([1,1,1,2])
-                    with col1:
-                        if st.button("Save Ticket", key=f"tk_save_{ticket['id']}"):
-                            ticket["query"] = edited_query.strip()
-                            ticket["status"] = new_status
-                            ticket["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                            if save_tickets(tickets_list, tickets_sha):
-                                st.success("✅ Ticket saved.")
-                                st.experimental_rerun()
-                            else:
-                                st.error("❌ Failed to save ticket.")
-                    with col2:
-                        delete_key = f"tk_del_confirm_{ticket['id']}"
-                        if st.session_state.get(delete_key, False):
-                            if st.button(f"Confirm Delete Ticket #{ticket['id']}", key=f"tk_del_confirm_btn_{ticket['id']}"):
-                                tickets_list = [t for t in tickets_list if t["id"] != ticket["id"]]
-                                st.session_state[delete_key] = False
-                                if save_tickets(tickets_list, tickets_sha):
-                                    st.success("✅ Ticket deleted.")
-                                    st.experimental_rerun()
-                                else:
-                                    st.error("❌ Failed to delete ticket.")
-                        else:
-                            if st.button(f"Delete Ticket #{ticket['id']}", key=f"tk_del_{ticket['id']}"):
-                                st.session_state[delete_key] = True
-                    with col3:
-                        if new_status == "Completed":
-                            if st.button("Mark Completed & Remove", key=f"tk_comp_{ticket['id']}"):
-                                tickets_list = [t for t in tickets_list if t["id"] != ticket["id"]]
-                                if save_tickets(tickets_list, tickets_sha):
-                                    st.success("✅ Ticket marked completed and removed from public view.")
-                                    st.experimental_rerun()
-                                else:
-                                    st.error("❌ Failed to update ticket.")
-                    with col4:
-                        with st.form(f"tk_reply_form_{ticket['id']}"):
-                            reply_text = st.text_area("Write a reply to this ticket:", key=f"tk_reply_text_{ticket['id']}", height=80)
-                            submitted_reply = st.form_submit_button("Submit Reply")
-                            if submitted_reply:
-                                if reply_text.strip():
-                                    reply = {
-                                        "message": reply_text.strip(),
-                                        "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                                    }
-                                    ticket.setdefault("replies", []).append(reply)
-                                    if save_tickets(tickets_list, tickets_sha):
-                                        st.success("✅ Reply saved.")
-                                        st.experimental_rerun()
-                                    else:
-                                        st.error("❌ Failed to save reply.")
-                                else:
-                                    st.error("❌ Reply cannot be empty.")
-        else:
-            st.write("No tickets available.")
-
-st.markdown("---")
-st.markdown("*This platform is for anonymous submissions to improve AIKTC.*")
+            csv_data = convert_to_csv(feedback_list, ["id", "message", "category", "created_at", "votes", "replies_count"])
+            st.download_button("
