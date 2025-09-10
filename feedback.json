@@ -5,6 +5,36 @@
     "category": "Other",
     "created_at": "2025-09-10T18:27:05",
     "replies": [],
-    "votes": 0
+    "votes": 0,
+    "labels": [],
+    "priority": "Medium",
+    "assigned_to": "",
+    "admin_notes": "",
+    "reactions": {
+      "like": 0,
+      "helpful": 0,
+      "agree": 0
+    },
+    "deleted_at": null,
+    "history": [],
+    "updated_at": "2025-09-10T18:27:05"
+  },
+  {
+    "id": 2,
+    "message": "Hello",
+    "created_at": "2025-09-10T19:13:27",
+    "updated_at": "2025-09-10T19:13:27",
+    "replies": [],
+    "labels": [],
+    "priority": "Medium",
+    "assigned_to": "",
+    "admin_notes": "",
+    "reactions": {
+      "like": 0,
+      "helpful": 0,
+      "agree": 0
+    },
+    "deleted_at": null,
+    "history": []
   }
 ]
