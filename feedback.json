@@ -1,1 +1,10 @@
-[]
+[
+  {
+    "id": 1,
+    "message": "Hello",
+    "category": "Other",
+    "created_at": "2025-09-10T18:27:05",
+    "replies": [],
+    "votes": 0
+  }
+]
