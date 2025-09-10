@@ -455,10 +455,34 @@ with tab_public:
     sorted_tickets = sort_items(filtered_tickets, st.session_state.ticket_sort, reverse=True)
     page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
 
-    if page_items:
+    page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
+
+if page_items:
     for ticket in page_items:
-        # Indented code here, e.g.:
-        st.write(f"Ticket #{ticket['id']}: {ticket['query']}")
-        # ... rest of your ticket display code
+        with st.expander (f"Ticket
+
+#{ticket['id']} -Status:
+
+{ticket.get('status','')} -
+
+Priority:
+
+{ticket.get('priority', 'Medium')}
+
+Votes: {ticket.get('votes',0)}
+
+(Created: {ticket['created_at']}
+
+UTC)"):
+
+st.write(f"**Query:**
+
+{ticket['query']}")
+
+#... rest of your
+
+ticket display and reply code
+
+here   # ... rest of your ticket display and reply code here
 else:
     st.write("No tickets submitted yet.")
