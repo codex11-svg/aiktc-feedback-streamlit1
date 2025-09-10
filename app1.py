@@ -153,7 +153,6 @@ def convert_feedback_to_csv(feedback_list):
     writer.writeheader()
     for fb in feedback_list:
         replies = fb.get("replies", [])
-        # Format replies as concatenated string: "message (created_at); ..."
         replies_str = "; ".join([f"{r['message']} ({r['created_at']})" for r in replies]) if replies else ""
         writer.writerow({
             "id": fb.get("id", ""),
@@ -454,4 +453,8 @@ with tab_public:
         priority=None if st.session_state.ticket_priority == "All" else st.session_state.ticket_priority
     )
     sorted_tickets = sort_items(filtered_tickets, st.session_state.ticket_sort, reverse=True)
-    page_items, has_more = paginate_items(sorted_tickets, st
+    page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
+
+    if page_items:
+        for ticket in page_items:
+            with st.exp
