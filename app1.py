@@ -4,13 +4,12 @@ import base64
 import json
 import csv
 import io
-import uuid
 from datetime import datetime, timedelta, timezone
 
 # =============== App Config ===============
 st.set_page_config(page_title="AIKTC Anonymous Feedback", page_icon="📝", layout="wide")
 st.title("📝 AIKTC Anonymous Feedback System")
-st.markdown("Submit feedback or queries anonymously. Identity remains protected.")
+st.markdown("Submit feedback or queries anonymously. Your identity remains protected.")
 
 # =============== Secrets ===============
 GITHUB_TOKEN = st.secrets["github_token"]
@@ -23,7 +22,7 @@ HEADERS = {
     "Accept": "application/vnd.github.v3+json"
 }
 
-# =============== Helpers ===============
+# =============== Utilities ===============
 def utc_now_str():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -67,44 +66,73 @@ def load_json_list(path):
         it.setdefault("reactions", {"like": 0, "helpful": 0, "agree": 0})
         it.setdefault("deleted_at", None)
         it.setdefault("history", [])
-        it.setdefault("updated_at", it.get("created_at", utc_now_str()))
+        it.setdefault("created_at", utc_now_str())
+        it.setdefault("updated_at", it.get("created_at"))
     return items, sha, headers
 
 def optimistic_save(path, items, old_sha, message, id_key="id"):
+    # First attempt
     r = update_file_content(path, json.dumps(items, indent=2), old_sha, message)
     if r.status_code in (200, 201):
         return True, r
+    # Conflict -> merge and retry
     if r.status_code in (409, 422):
         latest_str, latest_sha, _ = get_file_content(path)
         try:
             latest = json.loads(latest_str)
         except Exception:
             latest = []
-        idx = {x.get(id_key): x for x in latest if x.get(id_key) is not None}
+        by_id = {x.get(id_key): x for x in latest if x.get(id_key) is not None}
         for it in items:
             iid = it.get(id_key)
             if iid is None:
                 continue
-            if iid not in idx:
-                idx[iid] = it
+            if iid not in by_id:
+                by_id[iid] = it
             else:
-                a = idx[iid]
+                a = by_id[iid]
                 b = it
                 ta = parse_utc(a.get("updated_at", a.get("created_at", utc_now_str())))
                 tb = parse_utc(b.get("updated_at", b.get("created_at", utc_now_str())))
                 merged = a if ta >= tb else b
-                merged["replies"] = a.get("replies", []) + [r for r in b.get("replies", [])]
+                merged["replies"] = a.get("replies", []) + [rr for rr in b.get("replies", [])]
                 ra, rb = a.get("reactions", {}), b.get("reactions", {})
                 merged["reactions"] = {
                     "like": int(ra.get("like", 0)) + int(rb.get("like", 0)),
                     "helpful": int(ra.get("helpful", 0)) + int(rb.get("helpful", 0)),
                     "agree": int(ra.get("agree", 0)) + int(rb.get("agree", 0)),
                 }
-                idx[iid] = merged
-        merged_list = list(idx.values())
+                by_id[iid] = merged
+        merged_list = list(by_id.values())
         r2 = update_file_content(path, json.dumps(merged_list, indent=2), latest_sha, message + " (merge)")
         return (r2.status_code in (200, 201)), r2
     return False, r
+
+def mask_pii(text):
+    import re
+    if not text: return text
+    text = re.sub(r'\b[\w\.-]+@[\w\.-]+\.\w{2,}\b', '[email masked]', text)
+    text = re.sub(r'\b(?:\+?\d{1,3}[-.\s]?)?(?:\d{3}[-.\s]?){2}\d{4}\b', '[phone masked]', text)
+    return text
+
+def throttle_ok(key, limit_seconds=30, max_hourly=5):
+    now = datetime.now(timezone.utc)
+    hist = st.session_state.get(key, [])
+    hist = [t for t in hist if (now - t).total_seconds() <= 3600]
+    st.session_state[key] = hist
+    if hist and (now - hist[-1]).total_seconds() < limit_seconds:
+        return False, int(limit_seconds - (now - hist[-1]).total_seconds())
+    if len(hist) >= max_hourly:
+        return False, int(3600 - (now - hist).total_seconds())
+    hist.append(now)
+    st.session_state[key] = hist
+    return True, 0
+
+def add_history(item, action, before=None, after=None, author="admin"):
+    item.setdefault("history", []).append({
+        "action": action, "author": author, "at": utc_now_str(),
+        "before": before, "after": after
+    })
 
 def filter_items(items, keyword, fields, status=None):
     kw = (keyword or "").lower().strip()
@@ -136,44 +164,19 @@ def to_csv(data, fields):
     w = csv.DictWriter(buf, fieldnames=fields)
     w.writeheader()
     for row in data:
-        row_copy = dict(row)
-        row_copy["replies_count"] = len(row_copy.get("replies", []))
-        w.writerow({k: row_copy.get(k, "") for k in fields})
+        rc = dict(row)
+        rc["replies_count"] = len(rc.get("replies", []))
+        w.writerow({k: rc.get(k, "") for k in fields})
     return buf.getvalue()
 
-def mask_pii(text):
-    import re
-    if not text: return text
-    text = re.sub(r'\b[\w\.-]+@[\w\.-]+\.\w{2,}\b', '[email masked]', text)
-    text = re.sub(r'\b(?:\+?\d{1,3}[-.\s]?)?(?:\d{3}[-.\s]?){2}\d{4}\b', '[phone masked]', text)
-    return text
-
-def throttle_ok(key, limit_seconds=30, max_hourly=5):
-    now = datetime.now(timezone.utc)
-    hist = st.session_state.get(key, [])
-    hist = [t for t in hist if (now - t).total_seconds() <= 3600]
-    st.session_state[key] = hist
-    if hist and (now - hist[-1]).total_seconds() < limit_seconds:
-        return False, int(limit_seconds - (now - hist[-1]).total_seconds())
-    if len(hist) >= max_hourly:
-        return False, int(3600 - (now - hist).total_seconds())
-    hist.append(now)
-    st.session_state[key] = hist
-    return True, 0
-
-def add_history(item, action, before=None, after=None, author="admin"):
-    item.setdefault("history", []).append({
-        "action": action, "author": author, "at": utc_now_str(),
-        "before": before, "after": after
-    })
-
 def ensure_session_defaults():
-    for k, v in {
+    defaults = {
         "logged_in": False, "login_error": False,
-        "feedback_page_pub": 0, "ticket_page_open": 0,
-        "ticket_page_completed": 0, "ticket_page_all": 0,
+        "pub_fb_page": 0, "pub_tk_open_page": 0,
+        "pub_tk_completed_page": 0, "pub_tk_all_page": 0,
         "feedback_search_pub": "", "ticket_search_pub": ""
-    }.items():
+    }
+    for k, v in defaults.items():
         st.session_state.setdefault(k, v)
 
 ensure_session_defaults()
@@ -267,7 +270,7 @@ with tab_public:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
     public_feedback = [x for x in feedback_list if parse_utc(x["created_at"]) > cutoff]
     filtered_feedback = filter_items(public_feedback, st.session_state["feedback_search_pub"], ["message", "admin_notes", "labels"])
-    page_items, has_more = paginate_items(sorted(filtered_feedback, key=lambda x: x["created_at"], reverse=True), st.session_state["feedback_page_pub"], 5)
+    page_items, has_more = paginate_items(sorted(filtered_feedback, key=lambda x: x["created_at"], reverse=True), st.session_state["pub_fb_page"], 5)
 
     if page_items:
         for fb in page_items:
@@ -305,7 +308,7 @@ with tab_public:
         st.write("No feedback available.")
     if has_more:
         if st.button("Load more feedback", key="pub_fb_load_more"):
-            st.session_state["feedback_page_pub"] += 1
+            st.session_state["pub_fb_page"] += 1
             st.rerun()
 
     # Ticket submission
@@ -355,8 +358,8 @@ with tab_public:
     t_open, t_completed, t_all = st.tabs(["Open", "Completed", "All"])
     st.text_input("Search tickets:", key="ticket_search_pub", placeholder="Type to search tickets...")
 
-    def render_ticket_list(data, page_key_prefix):
-        page_key = f"{page_key_prefix}_page"
+    def render_ticket_list(data, view_prefix):
+        page_key = f"{view_prefix}_page"
         if page_key not in st.session_state:
             st.session_state[page_key] = 0
         page_items, has_more_local = paginate_items(data, st.session_state[page_key], 5)
@@ -374,7 +377,7 @@ with tab_public:
                     with colb3:
                         st.caption(f"Assignee: {ticket.get('assigned_to','—') or '—'}")
                     with colb4:
-                        if st.button("Copy link", key=f"pub_tk_link_btn_{ticket['id']}"):
+                        if st.button("Copy link", key=f"{view_prefix}_tk_link_btn_{ticket['id']}"):
                             set_ticket_param(ticket["id"])
                             st.success("Link set in URL")
                     if ticket.get("replies"):
@@ -384,7 +387,7 @@ with tab_public:
         else:
             st.write("No tickets available.")
         if has_more_local:
-            if st.button("Load more", key=f"{page_key_prefix}_load_more"):
+            if st.button("Load more", key=f"{view_prefix}_load_more"):
                 st.session_state[page_key] += 1
                 st.rerun()
 
@@ -438,5 +441,4 @@ if st.session_state["logged_in"]:
                         fb["message"] = edited_message.strip()
                         fb["labels"] = labels_list
                         fb["priority"] = priority
-                        fb["assigned_to"] = assigned.strip()
-                        fb["updated_at"] = utc
+                        fb["
