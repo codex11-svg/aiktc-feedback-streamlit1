@@ -41,7 +41,7 @@
     "id": 3,
     "message": "Hello we",
     "created_at": "2025-09-10T19:14:24",
-    "updated_at": "2025-09-10T19:14:24",
+    "updated_at": "2025-09-10T19:14:29",
     "replies": [],
     "labels": [],
     "priority": "Medium",
@@ -49,7 +49,7 @@
     "admin_notes": "",
     "reactions": {
       "like": 0,
-      "helpful": 0,
+      "helpful": 1,
       "agree": 0
     },
     "deleted_at": null,
