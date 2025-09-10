@@ -23,7 +23,7 @@
     "id": 2,
     "message": "Hello",
     "created_at": "2025-09-10T19:13:27",
-    "updated_at": "2025-09-10T19:13:47",
+    "updated_at": "2025-09-10T19:13:50",
     "replies": [],
     "labels": [],
     "priority": "Medium",
@@ -31,7 +31,7 @@
     "admin_notes": "",
     "reactions": {
       "like": 0,
-      "helpful": 0,
+      "helpful": 1,
       "agree": 1
     },
     "deleted_at": null,
