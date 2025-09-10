@@ -456,4 +456,4 @@ with tab_public:
     page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
 
     if page_items:
-        for ticket in page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
+        for ticket in page_items:
