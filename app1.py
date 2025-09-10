@@ -135,16 +135,6 @@ def paginate_items(items, page, page_size):
     end = start + page_size
     return items[start:end], len(items) > end
 
-def convert_to_csv(data, fields):
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=fields)
-    writer.writeheader()
-    for row in data:
-        row_copy = row.copy()
-        row_copy["replies_count"] = len(row_copy.get("replies", []))
-        writer.writerow({k: row_copy.get(k, "") for k in fields})
-    return output.getvalue()
-
 def sort_items(items, sort_key, reverse=False):
     if sort_key == "votes":
         return sorted(items, key=lambda x: x.get("votes", 0), reverse=reverse)
@@ -155,6 +145,55 @@ def sort_items(items, sort_key, reverse=False):
         return sorted(items, key=lambda x: priority_order.get(x.get("priority", "Medium"), 2), reverse=reverse)
     else:
         return items
+
+def convert_feedback_to_csv(feedback_list):
+    output = io.StringIO()
+    fieldnames = ["id", "message", "category", "created_at", "votes", "replies_count", "replies_details"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for fb in feedback_list:
+        replies = fb.get("replies", [])
+        # Format replies as concatenated string: "message (created_at); ..."
+        replies_str = "; ".join([f"{r['message']} ({r['created_at']})" for r in replies]) if replies else ""
+        writer.writerow({
+            "id": fb.get("id", ""),
+            "message": fb.get("message", "").replace("\n", " "),
+            "category": fb.get("category", ""),
+            "created_at": fb.get("created_at", ""),
+            "votes": fb.get("votes", 0),
+            "replies_count": len(replies),
+            "replies_details": replies_str
+        })
+    return output.getvalue()
+
+def convert_tickets_to_csv(tickets_list):
+    output = io.StringIO()
+    fieldnames = [
+        "id", "query", "category", "priority", "status",
+        "created_at", "updated_at", "votes", "replies_count", "replies_details", "attachments_count", "attachments_filenames"
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for tk in tickets_list:
+        replies = tk.get("replies", [])
+        replies_str = "; ".join([f"{r['message']} ({r['created_at']})" for r in replies]) if replies else ""
+        attachments = tk.get("attachments", [])
+        attachments_filenames = ", ".join([att.get("filename", "") for att in attachments]) if attachments else ""
+        writer.writerow({
+            "id": tk.get("id", ""),
+            "query": tk.get("query", "").replace("\n", " "),
+            "category": tk.get("category", ""),
+            "priority": tk.get("priority", ""),
+            "status": tk.get("status", ""),
+            "created_at": tk.get("created_at", ""),
+            "updated_at": tk.get("updated_at", ""),
+            "votes": tk.get("votes", 0),
+            "replies_count": len(replies),
+            "replies_details": replies_str,
+            "attachments_count": len(attachments),
+            "attachments_filenames": attachments_filenames
+        })
+    return output.getvalue()
 
 # --- Initialize session state ---
 
@@ -415,37 +454,4 @@ with tab_public:
         priority=None if st.session_state.ticket_priority == "All" else st.session_state.ticket_priority
     )
     sorted_tickets = sort_items(filtered_tickets, st.session_state.ticket_sort, reverse=True)
-    page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
-
-    if page_items:
-        for ticket in page_items:
-            with st.expander(f"Ticket #{ticket['id']} - Status: {ticket.get('status','')} - Priority: {ticket.get('priority','Medium')} - Votes: {ticket.get('votes',0)} (Created: {ticket['created_at']} UTC)"):
-                st.write(f"**Query:** {ticket['query']}")
-                st.write(f"Category: {ticket.get('category','')}")
-                st.write(f"Last Updated: {ticket['updated_at']} UTC")
-                if ticket.get("attachments"):
-                    st.markdown("**Attachments:**")
-                    for att in ticket["attachments"]:
-                        st.markdown(f"- {att['filename']} ({att['type']})")
-                if ticket.get("replies"):
-                    st.markdown("**Admin Replies:**")
-                    for reply in ticket["replies"]:
-                        st.markdown(f"- {reply['message']} (at {reply['created_at']} UTC)")
-
-                # Reply form
-                reply_key = f"tk_reply_{ticket['id']}"
-                reply_text = st.text_area("Write a reply:", key=reply_key, height=80)
-                if st.button("Submit Reply", key=f"tk_reply_btn_{ticket['id']}"):
-                    if reply_text.strip():
-                        ticket["replies"].append({
-                            "message": reply_text.strip(),
-                            "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                        })
-                        ticket["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-                        new_sha = save_tickets(tickets_list, st.session_state["tickets_sha"])
-                        if new_sha != st.session_state["tickets_sha"]:
-                            st.session_state["tickets_sha"] = new_sha
-                            st.success("Reply added and saved.")
-                            st.experimental_rerun()
-                        else:
-                            st.error("Failed
+    page_items, has_more = paginate_items(sorted_tickets, st
