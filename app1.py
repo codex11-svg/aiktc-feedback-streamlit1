@@ -260,12 +260,65 @@ else:
         st.session_state["logged_in"] = False
         st.experimental_rerun()
 
-# --- Main content ---
-# The public and admin views, feedback submission, viewing, ticket submission, viewing, etc.
-# This part continues with the same structure already reviewed above.
-# ...
+# --- Main content --- 
 
-# --- View Tickets (Corrected Ending) ---
+# The code continues similarly to how it was already structured,
+# including feedback submission, viewing, and the corrected tickets section,
+# which is detailed as follows:
+
+# --- Tickets search, filter, sort, pagination ---
+
+def reset_ticket_page():
+    st.session_state.ticket_page = 0
+
+st.header("View Tickets")
+col1, col2, col3, col4, col5 = st.columns([3,1,1,1,2])
+with col1:
+    st.text_input(
+        "Search tickets:",
+        key="ticket_search",
+        on_change=reset_ticket_page,
+        placeholder="Type to search tickets..."
+    )
+with col2:
+    st.selectbox(
+        "Category filter:",
+        ["All"] + TICKET_CATEGORIES,
+        key="ticket_category",
+        on_change=reset_ticket_page
+    )
+with col3:
+    st.selectbox(
+        "Status filter:",
+        ["All"] + TICKET_STATUSES,
+        key="ticket_status",
+        on_change=reset_ticket_page
+    )
+with col4:
+    st.selectbox(
+        "Priority filter:",
+        ["All"] + TICKET_PRIORITIES,
+        key="ticket_priority",
+        on_change=reset_ticket_page
+    )
+with col5:
+    st.selectbox(
+        "Sort by:",
+        ["date", "votes", "priority"],
+        key="ticket_sort",
+        on_change=reset_ticket_page
+    )
+
+filtered_tickets = filter_items(
+    tickets_list,
+    st.session_state.ticket_search,
+    ["query"],
+    category=None if st.session_state.ticket_category == "All" else st.session_state.ticket_category,
+    status=None if st.session_state.ticket_status == "All" else st.session_state.ticket_status,
+    priority=None if st.session_state.ticket_priority == "All" else st.session_state.ticket_priority
+)
+sorted_tickets = sort_items(filtered_tickets, st.session_state.ticket_sort, reverse=True)
+page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
 
 if page_items:
     for ticket in page_items:
@@ -300,4 +353,4 @@ else:
 if has_more:
     if st.button("Load more tickets"):
         st.session_state.ticket_page += 1
-        
+    
