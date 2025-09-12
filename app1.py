@@ -2,34 +2,30 @@ import streamlit as st
 import requests
 import base64
 import json
-import csv
 import io
-from datetime import datetime, timedelta, timezone
-import re
+import csv
+import uuid
+from datetime import datetime, timezone
 
-# =============== App Config ===============
-st.set_page_config(page_title="AIKTC Anonymous Feedback", page_icon="📝", layout="wide")
-st.title("📝 AIKTC Anonymous Feedback System")
-st.markdown("Submit feedback or queries anonymously. Your identity remains protected.")
-
-# =============== Secrets ===============
+# --- GitHub API Setup ---
 GITHUB_TOKEN = st.secrets["github_token"]
-REPO = st.secrets["repo"]  # e.g., "owner/repo"
+REPO = st.secrets["repo"]
 BRANCH = st.secrets.get("branch", "main")
-ADMIN_PASSWORD = st.secrets["admin_password"]
 
 HEADERS = {
     "Authorization": f"token {GITHUB_TOKEN}",
     "Accept": "application/vnd.github.v3+json"
 }
 
-# =============== Utilities ===============
+# --- Constants ---
+FEEDBACK_CATEGORIES = ["Academics", "Infrastructure", "Events", "Other"]
+TICKET_CATEGORIES = ["Academics", "Infrastructure", "Events", "Other"]
+TICKET_PRIORITIES = ["Low", "Medium", "High"]
+TICKET_STATUSES = ["In Process", "Completed"]
 
-def utc_now_str():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+PAGE_SIZE = 5
 
-def parse_utc(s):
-    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
+# --- GitHub file helpers ---
 
 def get_file_content(path):
     url = f"https://api.github.com/repos/{REPO}/contents/{path}?ref={BRANCH}"
@@ -38,355 +34,426 @@ def get_file_content(path):
         content = r.json()
         sha = content["sha"]
         file_data = base64.b64decode(content["content"]).decode()
-        return file_data, sha, r.headers
+        return file_data, sha
     elif r.status_code == 404:
-        return "[]", None, r.headers
+        return "[]", None
     else:
-        st.error(f"Error fetching {path} from GitHub: {r.status_code}")
+        st.error(f"Error fetching {path} from GitHub: {r.status_code} {r.text}")
         st.stop()
 
-def update_file_content(path, data_str, sha, message):
+def update_file_content(path, data_str, sha, commit_message):
     url = f"https://api.github.com/repos/{REPO}/contents/{path}"
-    encoded = base64.b64encode(data_str.encode()).decode()
-    payload = {"message": message, "content": encoded, "branch": BRANCH}
+    encoded_content = base64.b64encode(data_str.encode()).decode()
+    payload = {
+        "message": commit_message,
+        "content": encoded_content,
+        "branch": BRANCH
+    }
     if sha:
         payload["sha"] = sha
-    return requests.put(url, headers=HEADERS, json=payload)
+    r = requests.put(url, headers=HEADERS, json=payload)
+    if r.status_code in [200, 201]:
+        new_sha = r.json()["content"]["sha"]
+        return True, new_sha
+    else:
+        st.error(f"Error updating {path} on GitHub: {r.status_code} {r.text}")
+        return False, sha
 
-def load_json_list(path):
-    data_str, sha, headers = get_file_content(path)
-    try:
-        items = json.loads(data_str)
-    except Exception:
-        items = []
-    for it in items:
-        it.setdefault("replies", [])
-        it.setdefault("labels", [])
-        it.setdefault("priority", "Medium")
-        it.setdefault("assigned_to", "")
-        it.setdefault("admin_notes", "")
-        it.setdefault("reactions", {"like": 0, "helpful": 0, "agree": 0})
-        it.setdefault("deleted_at", None)
-        it.setdefault("history", [])
-        it.setdefault("created_at", utc_now_str())
-        it.setdefault("updated_at", it.get("created_at"))
-    return items, sha, headers
+# --- Load and save feedback ---
 
-def optimistic_save(path, items, old_sha, message, id_key="id"):
-    r = update_file_content(path, json.dumps(items, indent=2), old_sha, message)
-    if r.status_code in (200, 201):
-        return True, r
-    if r.status_code in (409, 422):
-        latest_str, latest_sha, _ = get_file_content(path)
-        try:
-            latest = json.loads(latest_str)
-        except Exception:
-            latest = []
-        by_id = {x.get(id_key): x for x in latest if x.get(id_key) is not None}
-        for it in items:
-            iid = it.get(id_key)
-            if iid is None:
+def load_feedback():
+    data_str, sha = get_file_content("feedback.json")
+    feedback_list = json.loads(data_str)
+    for fb in feedback_list:
+        fb.setdefault("replies", [])
+        fb.setdefault("votes", 0)
+        fb.setdefault("category", "Other")
+    return feedback_list, sha
+
+def save_feedback(feedback_list, sha):
+    data_str = json.dumps(feedback_list, indent=2)
+    success, new_sha = update_file_content("feedback.json", data_str, sha, "Update feedback data")
+    if success:
+        return new_sha
+    else:
+        return sha
+
+# --- Load and save tickets ---
+
+def load_tickets():
+    data_str, sha = get_file_content("tickets.json")
+    tickets_list = json.loads(data_str)
+    for tk in tickets_list:
+        tk.setdefault("replies", [])
+        tk.setdefault("votes", 0)
+        tk.setdefault("priority", "Medium")
+        tk.setdefault("status", "In Process")
+        tk.setdefault("category", "Other")
+        tk.setdefault("attachments", [])
+    return tickets_list, sha
+
+def save_tickets(tickets_list, sha):
+    data_str = json.dumps(tickets_list, indent=2)
+    success, new_sha = update_file_content("tickets.json", data_str, sha, "Update tickets data")
+    if success:
+        return new_sha
+    else:
+        return sha
+
+# --- Utility functions ---
+
+def generate_session_id():
+    if "anon_session_id" not in st.session_state:
+        st.session_state["anon_session_id"] = str(uuid.uuid4())
+    return st.session_state["anon_session_id"]
+
+def filter_items(items, keyword, fields, category=None, status=None, priority=None):
+    if not keyword and not category and not status and not priority:
+        return items
+    keyword_lower = keyword.lower() if keyword else None
+    filtered = []
+    for item in items:
+        if category and item.get("category", "") != category:
+            continue
+        if status and item.get("status", "") != status:
+            continue
+        if priority and item.get("priority", "") != priority:
+            continue
+        if keyword_lower:
+            matched = False
+            for field in fields:
+                if field in item and keyword_lower in item[field].lower():
+                    matched = True
+                    break
+            if not matched:
                 continue
-            if iid not in by_id:
-                by_id[iid] = it
-            else:
-                a = by_id[iid]
-                b = it
-                ta = parse_utc(a.get("updated_at", a.get("created_at", utc_now_str())))
-                tb = parse_utc(b.get("updated_at", b.get("created_at", utc_now_str())))
-                merged = a if ta >= tb else b
-                merged["replies"] = a.get("replies", []) + [rr for rr in b.get("replies", [])]
-                ra, rb = a.get("reactions", {}), b.get("reactions", {})
-                merged["reactions"] = {
-                    "like": int(ra.get("like", 0)) + int(rb.get("like", 0)),
-                    "helpful": int(ra.get("helpful", 0)) + int(rb.get("helpful", 0)),
-                    "agree": int(ra.get("agree", 0)) + int(rb.get("agree", 0)),
-                }
-                by_id[iid] = merged
-        merged_list = list(by_id.values())
-        r2 = update_file_content(path, json.dumps(merged_list, indent=2), latest_sha, message + " (merge)")
-        return (r2.status_code in (200, 201)), r2
-    return False, r
+        filtered.append(item)
+    return filtered
 
-def mask_pii(text):
-    if not text:
-        return text
-    text = re.sub(r'\b[\w\.-]+@[\w\.-]+\.\w{2,}\b', '[email masked]', text)
-    text = re.sub(r'\b(?:\+?\d{1,3}[-.\s]?)?(?:\d{3}[-.\s]?){2}\d{4}\b', '[phone masked]', text)
-    return text
-
-def throttle_ok(key, limit_seconds=30, max_hourly=5):
-    now = datetime.now(timezone.utc)
-    hist = st.session_state.get(key, [])
-    hist = [t for t in hist if (now - t).total_seconds() <= 3600]
-    st.session_state[key] = hist
-    if hist and (now - hist[-1]).total_seconds() < limit_seconds:
-        return False, int(limit_seconds - (now - hist[-1]).total_seconds())
-    if len(hist) >= max_hourly:
-        return False, int(3600 - (now - hist[0]).total_seconds())
-    hist.append(now)
-    st.session_state[key] = hist
-    return True, 0
-
-def add_history(item, action, before=None, after=None, author="admin"):
-    item.setdefault("history", []).append({
-        "action": action, "author": author, "at": utc_now_str(),
-        "before": before, "after": after
-    })
-
-def filter_items(items, keyword, fields, status=None):
-    kw = (keyword or "").lower().strip()
-    out = []
-    for it in items:
-        if status and it.get("status") != status:
-            continue
-        if not kw:
-            out.append(it)
-            continue
-        hay = []
-        for f in fields:
-            v = it.get(f, "")
-            if isinstance(v, str):
-                hay.append(v.lower())
-            elif isinstance(v, list):
-                hay.extend([str(x).lower() for x in v])
-        for rp in it.get("replies", []):
-            hay.append(str(rp.get("message", "")).lower())
-        if any(kw in h for h in hay):
-            out.append(it)
-    return out
-
-def paginate_items(items, page, size):
-    start, end = page * size, page * size + size
+def paginate_items(items, page, page_size):
+    start = page * page_size
+    end = start + page_size
     return items[start:end], len(items) > end
 
-def to_csv(data, fields):
-    buf = io.StringIO()
-    w = csv.DictWriter(buf, fieldnames=fields)
-    w.writeheader()
-    for row in data:
-        rc = dict(row)
-        rc["replies_count"] = len(rc.get("replies", []))
-        w.writerow({k: rc.get(k, "") for k in fields})
-    return buf.getvalue()
+def sort_items(items, sort_key, reverse=False):
+    if sort_key == "votes":
+        return sorted(items, key=lambda x: x.get("votes", 0), reverse=reverse)
+    elif sort_key == "date":
+        return sorted(items, key=lambda x: x.get("created_at", ""), reverse=reverse)
+    elif sort_key == "priority":
+        priority_order = {"High": 3, "Medium": 2, "Low": 1}
+        return sorted(items, key=lambda x: priority_order.get(x.get("priority", "Medium"), 2), reverse=reverse)
+    else:
+        return items
 
-def ensure_session_defaults():
-    defaults = {
-        "logged_in": False, "login_error": False,
-        "pub_fb_page": 0, "pub_tk_open_page": 0,
-        "pub_tk_completed_page": 0, "pub_tk_all_page": 0,
-        "feedback_search_pub": "", "ticket_search_pub": ""
-    }
-    for k, v in defaults.items():
-        st.session_state.setdefault(k, v)
+def convert_feedback_to_csv(feedback_list):
+    output = io.StringIO()
+    fieldnames = ["id", "message", "category", "created_at", "votes", "replies_count", "replies_details"]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for fb in feedback_list:
+        replies = fb.get("replies", [])
+        replies_str = "; ".join([f"{r['message']} ({r['created_at']})" for r in replies]) if replies else ""
+        writer.writerow({
+            "id": fb.get("id", ""),
+            "message": fb.get("message", "").replace("\n", " "),
+            "category": fb.get("category", ""),
+            "created_at": fb.get("created_at", ""),
+            "votes": fb.get("votes", 0),
+            "replies_count": len(replies),
+            "replies_details": replies_str
+        })
+    return output.getvalue()
 
-ensure_session_defaults()
+def convert_tickets_to_csv(tickets_list):
+    output = io.StringIO()
+    fieldnames = [
+        "id", "query", "category", "priority", "status",
+        "created_at", "updated_at", "votes", "replies_count", "replies_details", "attachments_count", "attachments_filenames"
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for tk in tickets_list:
+        replies = tk.get("replies", [])
+        replies_str = "; ".join([f"{r['message']} ({r['created_at']})" for r in replies]) if replies else ""
+        attachments = tk.get("attachments", [])
+        attachments_filenames = ", ".join([att.get("filename", "") for att in attachments]) if attachments else ""
+        writer.writerow({
+            "id": tk.get("id", ""),
+            "query": tk.get("query", "").replace("\n", " "),
+            "category": tk.get("category", ""),
+            "priority": tk.get("priority", ""),
+            "status": tk.get("status", ""),
+            "created_at": tk.get("created_at", ""),
+            "updated_at": tk.get("updated_at", ""),
+            "votes": tk.get("votes", 0),
+            "replies_count": len(replies),
+            "replies_details": replies_str,
+            "attachments_count": len(attachments),
+            "attachments_filenames": attachments_filenames
+        })
+    return output.getvalue()
 
-# =============== Load data ===============
-feedback_list, feedback_sha, fb_headers = load_json_list("feedback.json")
-tickets_list, tickets_sha, tk_headers = load_json_list("tickets.json")
+# --- Initialize session state ---
 
-# =============== Sidebar: Admin Login ===============
-st.sidebar.title("🔐 Admin")
-if not st.session_state["logged_in"]:
-    pwd = st.sidebar.text_input("Enter admin password:", type="password", key="adm_pwd")
-    if st.sidebar.button("Login", key="adm_login_btn"):
-        if pwd == ADMIN_PASSWORD:
+if "tickets_sha" not in st.session_state:
+    _, st.session_state["tickets_sha"] = load_tickets()
+if "feedback_sha" not in st.session_state:
+    _, st.session_state["feedback_sha"] = load_feedback()
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+if "login_error" not in st.session_state:
+    st.session_state["login_error"] = False
+if "feedback_page" not in st.session_state:
+    st.session_state["feedback_page"] = 0
+if "ticket_page" not in st.session_state:
+    st.session_state["ticket_page"] = 0
+if "feedback_search" not in st.session_state:
+    st.session_state["feedback_search"] = ""
+if "ticket_search" not in st.session_state:
+    st.session_state["ticket_search"] = ""
+if "feedback_category" not in st.session_state:
+    st.session_state["feedback_category"] = "All"
+if "ticket_category" not in st.session_state:
+    st.session_state["ticket_category"] = "All"
+if "ticket_status" not in st.session_state:
+    st.session_state["ticket_status"] = "All"
+if "ticket_priority" not in st.session_state:
+    st.session_state["ticket_priority"] = "All"
+if "feedback_sort" not in st.session_state:
+    st.session_state["feedback_sort"] = "date"
+if "ticket_sort" not in st.session_state:
+    st.session_state["ticket_sort"] = "date"
+
+# --- Streamlit UI ---
+
+st.set_page_config(page_title="AIKTC Anonymous Feedback", page_icon="📝", layout="wide")
+st.title("📝 AIKTC Anonymous Feedback System")
+st.markdown("Submit your feedback or queries anonymously. Your identity remains protected.")
+
+anon_session_id = generate_session_id()
+
+feedback_list, feedback_sha = load_feedback()
+tickets_list, tickets_sha = load_tickets()
+st.session_state["feedback_sha"] = feedback_sha
+st.session_state["tickets_sha"] = tickets_sha
+
+# --- Sidebar Login/Logout ---
+
+st.sidebar.title("🔐 Admin Login")
+
+if not st.session_state.get("logged_in", False):
+    password = st.sidebar.text_input("Enter admin password:", type="password")
+    if st.sidebar.button("Login"):
+        if password == st.secrets["admin_password"]:
             st.session_state["logged_in"] = True
             st.session_state["login_error"] = False
+            st.sidebar.success("Logged in successfully!")
             st.experimental_rerun()
         else:
             st.session_state["login_error"] = True
-    if st.session_state["login_error"]:
+    if st.session_state.get("login_error", False):
         st.sidebar.error("❌ Incorrect password. Try again.")
 else:
-    st.sidebar.success("✅ Logged in")
-    if st.sidebar.button("Logout", key="adm_logout_btn"):
+    st.sidebar.success("✅ Logged in as admin")
+    if st.sidebar.button("Logout"):
         st.session_state["logged_in"] = False
         st.experimental_rerun()
 
-# =============== Query params (deep links) ===============
-qp = st.experimental_get_query_params()
-deep_ticket_id = int(qp.get("t")[0]) if qp.get("t") else None
-deep_feedback_id = int(qp.get("fb")[0]) if qp.get("fb") else None
+# --- Main content ---
 
-def set_ticket_param(i):
-    st.experimental_set_query_params(t=str(i))
-
-def set_feedback_param(i):
-    st.experimental_set_query_params(fb=str(i))
-
-# =============== Tabs ===============
 if st.session_state["logged_in"]:
     tab_public, tab_admin = st.tabs(["Public View", "Admin Panel"])
 else:
     tab_public = st.container()
 
-# =============== Public View ===============
 with tab_public:
-    # Feedback submit
     st.header("Anonymous Feedback")
-    with st.form("pub_feedback_form"):
-        fb_msg = st.text_area("Write your feedback (Markdown supported):", "", height=100, key="pub_fb_text")
-        colf1, colf2 = st.columns([1,1])
-        with colf1:
-            st.caption("Preview:")
-            st.markdown(fb_msg or "_Nothing yet_")
-        with colf2:
-            st.caption("Tips: Use **bold**, - bullets.")
-        submit_fb = st.form_submit_button("Submit Feedback", use_container_width=True)
-    if submit_fb:
-        ok, wait = throttle_ok("pub_fb_throttle", limit_seconds=30, max_hourly=5)
-        if not ok:
-            st.error(f"Rate limit: wait {wait} seconds or try later.")
-        elif fb_msg.strip():
+    with st.form("feedback_form"):
+        feedback_message = st.text_area("Write your feedback here:", "", height=100)
+        feedback_category = st.selectbox("Select category:", FEEDBACK_CATEGORIES)
+        submitted_feedback = st.form_submit_button("Submit Feedback")
+
+    if submitted_feedback:
+        if feedback_message.strip():
             new_fb = {
                 "id": (max([fb["id"] for fb in feedback_list]) + 1) if feedback_list else 1,
-                "message": mask_pii(fb_msg.strip()),
-                "created_at": utc_now_str(),
-                "updated_at": utc_now_str(),
+                "message": feedback_message.strip(),
+                "category": feedback_category,
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
                 "replies": [],
-                "labels": [],
-                "priority": "Medium",
-                "assigned_to": "",
-                "admin_notes": "",
-                "reactions": {"like": 0, "helpful": 0, "agree": 0},
-                "deleted_at": None,
-                "history": []
+                "votes": 0
             }
             feedback_list.append(new_fb)
-            ok_save, _ = optimistic_save("feedback.json", feedback_list, feedback_sha, "Add feedback")
-            if ok_save:
-                st.success("✅ Feedback submitted!")
-                set_feedback_param(new_fb["id"])
-                st.experimental_rerun()
+            new_sha = save_feedback(feedback_list, st.session_state["feedback_sha"])
+            if new_sha != st.session_state["feedback_sha"]:
+                st.session_state["feedback_sha"] = new_sha
+                st.success("✅ Feedback submitted successfully!")
             else:
                 st.error("❌ Failed to save feedback.")
         else:
-            st.error("❌ Please enter some feedback.")
+            st.error("❌ Please enter some feedback before submitting.")
 
-    # Feedback list (recent)
-    st.subheader("Recent Feedback (24h)")
-    st.text_input("Search feedback:", key="feedback_search_pub", placeholder="Type to search feedback...")
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
-    public_feedback = [x for x in feedback_list if parse_utc(x["created_at"]) > cutoff and not x.get("deleted_at")]
-    filtered_feedback = filter_items(public_feedback, st.session_state["feedback_search_pub"], ["message", "admin_notes", "labels"])
-    page_items, has_more = paginate_items(sorted(filtered_feedback, key=lambda x: x["created_at"], reverse=True), st.session_state["pub_fb_page"], 5)
+    # --- Feedback search, filter, sort, pagination ---
+    def reset_feedback_page():
+        st.session_state.feedback_page = 0
+
+    st.header("View Submitted Feedback")
+    col1, col2, col3 = st.columns([3,1,2])
+    with col1:
+        st.text_input(
+            "Search feedback:",
+            key="feedback_search",
+            on_change=reset_feedback_page,
+            placeholder="Type to search feedback..."
+        )
+    with col2:
+        st.selectbox(
+            "Category filter:",
+            ["All"] + FEEDBACK_CATEGORIES,
+            key="feedback_category",
+            on_change=reset_feedback_page
+        )
+    with col3:
+        st.selectbox(
+            "Sort by:",
+            ["date", "votes"],
+            key="feedback_sort",
+            on_change=reset_feedback_page
+        )
+
+    filtered_feedback = filter_items(
+        feedback_list,
+        st.session_state.feedback_search,
+        ["message"],
+        category=None if st.session_state.feedback_category == "All" else st.session_state.feedback_category
+    )
+    sorted_feedback = sort_items(filtered_feedback, st.session_state.feedback_sort, reverse=True)
+    page_items, has_more = paginate_items(sorted_feedback, st.session_state.feedback_page, PAGE_SIZE)
 
     if page_items:
         for fb in page_items:
-            expanded = (deep_feedback_id == fb["id"])
-            with st.expander(f"Feedback #{fb['id']} • {fb['created_at']} UTC", expanded=expanded):
-                st.markdown(fb["message"])
-                colx1, colx2, colx3, colx4 = st.columns([1,1,1,3])
-                with colx1:
-                    if st.button(f"👍 {fb['reactions'].get('like',0)}", key=f"pub_fb_like_btn_{fb['id']}"):
-                        fb["reactions"]["like"] = fb["reactions"].get("like",0) + 1
-                        fb["updated_at"] = utc_now_str()
-                        optimistic_save("feedback.json", feedback_list, feedback_sha, "React feedback")
-                        st.experimental_rerun()
-                with colx2:
-                    if st.button(f"✅ {fb['reactions'].get('helpful',0)}", key=f"pub_fb_helpful_btn_{fb['id']}"):
-                        fb["reactions"]["helpful"] = fb["reactions"].get("helpful",0) + 1
-                        fb["updated_at"] = utc_now_str()
-                        optimistic_save("feedback.json", feedback_list, feedback_sha, "React feedback")
-                        st.experimental_rerun()
-                with colx3:
-                    if st.button(f"🙌 {fb['reactions'].get('agree',0)}", key=f"pub_fb_agree_btn_{fb['id']}"):
-                        fb["reactions"]["agree"] = fb["reactions"].get("agree",0) + 1
-                        fb["updated_at"] = utc_now_str()
-                        optimistic_save("feedback.json", feedback_list, feedback_sha, "React feedback")
-                        st.experimental_rerun()
-                with colx4:
-                    if st.button("Copy link", key=f"pub_fb_link_btn_{fb['id']}"):
-                        set_feedback_param(fb["id"])
-                        st.success("Link set in URL")
+            with st.expander(f"Feedback #{fb['id']} (Category: {fb.get('category','')}, Votes: {fb.get('votes',0)}) - Submitted: {fb['created_at']} UTC"):
+                st.write(fb["message"])
                 if fb.get("replies"):
                     st.markdown("**Admin Replies:**")
                     for reply in fb["replies"]:
                         st.markdown(f"- {reply['message']} (at {reply['created_at']} UTC)")
+                col_up, col_down = st.columns([1,1])
+                with col_up:
+                    if st.button(f"👍 Upvote Feedback #{fb['id']}", key=f"fb_upvote_{fb['id']}"):
+                        fb["votes"] = fb.get("votes", 0) + 1
+                        new_sha = save_feedback(feedback_list, st.session_state["feedback_sha"])
+                        if new_sha != st.session_state["feedback_sha"]:
+                            st.session_state["feedback_sha"] = new_sha
+                        st.experimental_rerun()
+                with col_down:
+                    if st.button(f"👎 Downvote Feedback #{fb['id']}", key=f"fb_downvote_{fb['id']}"):
+                        fb["votes"] = max(fb.get("votes", 0) - 1, 0)
+                        new_sha = save_feedback(feedback_list, st.session_state["feedback_sha"])
+                        if new_sha != st.session_state["feedback_sha"]:
+                            st.session_state["feedback_sha"] = new_sha
+                        st.experimental_rerun()
     else:
-        st.write("No feedback available.")
-    if has_more:
-        if st.button("Load more feedback", key="pub_fb_load_more"):
-            st.session_state["pub_fb_page"] += 1
-            st.experimental_rerun()
+        st.write("No feedback submitted yet.")
 
-    # Ticket submission
+    if has_more:
+        if st.button("Load more feedback"):
+            st.session_state.feedback_page += 1
+
     st.header("Submit a Ticket/Query")
-    with st.form("pub_ticket_form"):
-        ticket_query = st.text_area("Write your query (Markdown supported):", "", height=100, key="pub_tk_text")
-        colp1, colp2 = st.columns([1,1])
-        with colp1:
-            st.caption("Preview:")
-            st.markdown(ticket_query or "_Nothing yet_")
-        with colp2:
-            priority_new = st.selectbox("Priority", ["Low","Medium","High"], index=1, key="pub_tk_priority")
-        submit_ticket = st.form_submit_button("Submit Ticket", use_container_width=True)
-    if submit_ticket:
-        ok, wait = throttle_ok("pub_tk_throttle", limit_seconds=30, max_hourly=5)
-        if not ok:
-            st.error(f"Rate limit: wait {wait} seconds or try later.")
-        elif ticket_query.strip():
+    with st.form("ticket_form"):
+        ticket_query = st.text_area("Write your query here:", "", height=100)
+        ticket_category = st.selectbox("Select category:", TICKET_CATEGORIES)
+        ticket_priority = st.selectbox("Select priority:", TICKET_PRIORITIES, index=1)
+        ticket_file = st.file_uploader("Attach a file (optional)", type=["png", "jpg", "jpeg", "pdf", "txt"])
+        submitted_ticket = st.form_submit_button("Submit Ticket")
+
+    if submitted_ticket:
+        if ticket_query.strip():
+            attachments = []
+            if ticket_file is not None:
+                file_content = ticket_file.read()
+                encoded_file = base64.b64encode(file_content).decode()
+                attachments.append({
+                    "filename": ticket_file.name,
+                    "content_base64": encoded_file,
+                    "type": ticket_file.type
+                })
             new_ticket = {
                 "id": (max([t["id"] for t in tickets_list]) + 1) if tickets_list else 1,
-                "query": mask_pii(ticket_query.strip()),
+                "query": ticket_query.strip(),
+                "category": ticket_category,
+                "priority": ticket_priority,
                 "status": "In Process",
-                "created_at": utc_now_str(),
-                "updated_at": utc_now_str(),
+                "created_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
                 "replies": [],
-                "labels": [],
-                "priority": priority_new,
-                "assigned_to": "",
-                "admin_notes": "",
-                "reactions": {"like": 0, "helpful": 0, "agree": 0},
-                "deleted_at": None,
-                "history": []
+                "votes": 0,
+                "attachments": attachments
             }
             tickets_list.append(new_ticket)
-            ok_save, _ = optimistic_save("tickets.json", tickets_list, tickets_sha, "Add ticket")
-            if ok_save:
-                st.success("✅ Ticket submitted!")
-                set_ticket_param(new_ticket["id"])
-                st.experimental_rerun()
+            new_sha = save_tickets(tickets_list, st.session_state["tickets_sha"])
+            if new_sha != st.session_state["tickets_sha"]:
+                st.session_state["tickets_sha"] = new_sha
+                st.success("✅ Ticket submitted successfully!")
             else:
                 st.error("❌ Failed to save ticket.")
         else:
-            st.error("❌ Please enter a query.")
+            st.error("❌ Please enter a query before submitting.")
 
-    # Ticket views: Open / Completed / All
+    # --- Tickets search, filter, sort, pagination ---
+    def reset_ticket_page():
+        st.session_state.ticket_page = 0
+
     st.header("View Tickets")
-    t_open, t_completed, t_all = st.tabs(["Open", "Completed", "All"])
-    st.text_input("Search tickets:", key="ticket_search_pub", placeholder="Type to search tickets...")
-def render_ticket_list(data, view_prefix):
-    page_key = f"{view_prefix}_page"
-    if page_key not in st.session_state:
-        st.session_state[page_key] = 0
-    page_items, has_more_local = paginate_items(data, st.session_state[page_key], 5)
+    col1, col2, col3, col4, col5 = st.columns([3,1,1,1,2])
+    with col1:
+        st.text_input(
+            "Search tickets:",
+            key="ticket_search",
+            on_change=reset_ticket_page,
+            placeholder="Type to search tickets..."
+        )
+    with col2:
+        st.selectbox(
+            "Category filter:",
+            ["All"] + TICKET_CATEGORIES,
+            key="ticket_category",
+            on_change=reset_ticket_page
+        )
+    with col3:
+        st.selectbox(
+            "Status filter:",
+            ["All"] + TICKET_STATUSES,
+            key="ticket_status",
+            on_change=reset_ticket_page
+        )
+    with col4:
+        st.selectbox(
+            "Priority filter:",
+            ["All"] + TICKET_PRIORITIES,
+            key="ticket_priority",
+            on_change=reset_ticket_page
+        )
+    with col5:
+        st.selectbox(
+            "Sort by:",
+            ["date", "votes", "priority"],
+            key="ticket_sort",
+            on_change=reset_ticket_page
+        )
+
+    filtered_tickets = filter_items(
+        tickets_list,
+        st.session_state.ticket_search,
+        ["query"],
+        category=None if st.session_state.ticket_category == "All" else st.session_state.ticket_category,
+        status=None if st.session_state.ticket_status == "All" else st.session_state.ticket_status,
+        priority=None if st.session_state.ticket_priority == "All" else st.session_state.ticket_priority
+    )
+    sorted_tickets = sort_items(filtered_tickets, st.session_state.ticket_sort, reverse=True)
+    page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
+
     if page_items:
-        for ticket in page_items:
-            expanded = (deep_ticket_id == ticket["id"])
-            chip = "✅ Completed" if ticket["status"] == "Completed" else "🟡 In Process"
-            with st.expander(f"Ticket #{ticket['id']} • {chip} • {ticket['updated_at']} UTC", expanded=expanded):
-                st.markdown(f"**Query:**\n\n{ticket['query']}")
-                colb1, colb2, colb3, colb4 = st.columns([1,1,1,2])
-                with colb1:
-                    st.caption(f"Labels: {', '.join(ticket.get('labels', [])) or '—'}")
-                with colb2:
-                    st.caption(f"Priority: {ticket.get('priority','Medium')}")
-                with colb3:
-                    st.caption(f"Assignee: {ticket.get('assigned_to','—')}")
-                with colb4:
-                    if st.button("Copy link", key=f"{view_prefix}_tk_link_btn_{ticket['id']}"):
-                        set_ticket_param(ticket["id"])
-                        st.success("Link set in URL")
-                if ticket.get("replies"):
-                    st.markdown("**Admin Replies:**")
-                    for reply in ticket["replies"]:
-                        st.markdown(f"- {reply['message']} (at {reply['created_at']} UTC)")
-    else:
-        st.write("No tickets available.")
-    if has_more_local:
-        if st.button("Load more", key=f"{view_prefix}_load_more"):
-            st.session_state[page_key] += 1
-            st.experimental_rerun()
+        for ticket in page_items, has_more = paginate_items(sorted_tickets, st.session_state.ticket_page, PAGE_SIZE)
