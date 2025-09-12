@@ -54,5 +54,23 @@
     },
     "deleted_at": null,
     "history": []
+  },
+  {
+    "id": 4,
+    "message": "Best COLLEGE",
+    "created_at": "2025-09-12T07:12:46",
+    "updated_at": "2025-09-12T07:12:46",
+    "replies": [],
+    "labels": [],
+    "priority": "Medium",
+    "assigned_to": "",
+    "admin_notes": "",
+    "reactions": {
+      "like": 0,
+      "helpful": 0,
+      "agree": 0
+    },
+    "deleted_at": null,
+    "history": []
   }
 ]
