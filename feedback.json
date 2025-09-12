@@ -59,14 +59,14 @@
     "id": 4,
     "message": "Best COLLEGE",
     "created_at": "2025-09-12T07:12:46",
-    "updated_at": "2025-09-12T07:12:46",
+    "updated_at": "2025-09-12T07:13:12",
     "replies": [],
     "labels": [],
     "priority": "Medium",
     "assigned_to": "",
     "admin_notes": "",
     "reactions": {
-      "like": 0,
+      "like": 1,
       "helpful": 0,
       "agree": 0
     },
