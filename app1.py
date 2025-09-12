@@ -358,22 +358,35 @@ with tab_public:
     st.header("View Tickets")
     t_open, t_completed, t_all = st.tabs(["Open", "Completed", "All"])
     st.text_input("Search tickets:", key="ticket_search_pub", placeholder="Type to search tickets...")
-
-    def render_ticket_list(data, view_prefix):
-        page_key = f"{view_prefix}_page"
-        if page_key not in st.session_state:
-            st.session_state[page_key] = 0
-        page_items, has_more_local = paginate_items(data, st.session_state[page_key], 5)
-        if page_items:
-            for ticket in page_items:
-                expanded = (deep_ticket_id == ticket["id"])
-                chip = "✅ Completed" if ticket["status"] == "Completed" else "🟡 In Process"
-                with st.expander(f"Ticket #{ticket['id']} • {chip} • {ticket['updated_at']} UTC", expanded=expanded):
-                    st.markdown(f"**Query:**\n\n{ticket['query']}")
-                    colb1, colb2, colb3, colb4 = st.columns([1,1,1,2])
-                    with colb1:
-                        st.caption(f"Labels: {', '.join(ticket.get('labels', [])) or '—'}")
-                    with colb2:
-                        st.caption(f"Priority: {ticket.get('priority','Medium')}")
-                    with colb3:
-                        st.caption(f"Assignee: {ticket.get('assigned_to','—')
+def render_ticket_list(data, view_prefix):
+    page_key = f"{view_prefix}_page"
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+    page_items, has_more_local = paginate_items(data, st.session_state[page_key], 5)
+    if page_items:
+        for ticket in page_items:
+            expanded = (deep_ticket_id == ticket["id"])
+            chip = "✅ Completed" if ticket["status"] == "Completed" else "🟡 In Process"
+            with st.expander(f"Ticket #{ticket['id']} • {chip} • {ticket['updated_at']} UTC", expanded=expanded):
+                st.markdown(f"**Query:**\n\n{ticket['query']}")
+                colb1, colb2, colb3, colb4 = st.columns([1,1,1,2])
+                with colb1:
+                    st.caption(f"Labels: {', '.join(ticket.get('labels', [])) or '—'}")
+                with colb2:
+                    st.caption(f"Priority: {ticket.get('priority','Medium')}")
+                with colb3:
+                    st.caption(f"Assignee: {ticket.get('assigned_to','—')}")
+                with colb4:
+                    if st.button("Copy link", key=f"{view_prefix}_tk_link_btn_{ticket['id']}"):
+                        set_ticket_param(ticket["id"])
+                        st.success("Link set in URL")
+                if ticket.get("replies"):
+                    st.markdown("**Admin Replies:**")
+                    for reply in ticket["replies"]:
+                        st.markdown(f"- {reply['message']} (at {reply['created_at']} UTC)")
+    else:
+        st.write("No tickets available.")
+    if has_more_local:
+        if st.button("Load more", key=f"{view_prefix}_load_more"):
+            st.session_state[page_key] += 1
+            st.experimental_rerun()
