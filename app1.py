@@ -5,6 +5,7 @@ import json
 import csv
 import io
 from datetime import datetime, timedelta, timezone
+import re
 
 # =============== App Config ===============
 st.set_page_config(page_title="AIKTC Anonymous Feedback", page_icon="📝", layout="wide")
@@ -13,7 +14,7 @@ st.markdown("Submit feedback or queries anonymously. Your identity remains prote
 
 # =============== Secrets ===============
 GITHUB_TOKEN = st.secrets["github_token"]
-REPO = st.secrets["repo"]                 # e.g., "owner/repo"
+REPO = st.secrets["repo"]  # e.g., "owner/repo"
 BRANCH = st.secrets.get("branch", "main")
 ADMIN_PASSWORD = st.secrets["admin_password"]
 
@@ -23,6 +24,7 @@ HEADERS = {
 }
 
 # =============== Utilities ===============
+
 def utc_now_str():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
@@ -71,11 +73,9 @@ def load_json_list(path):
     return items, sha, headers
 
 def optimistic_save(path, items, old_sha, message, id_key="id"):
-    # First attempt
     r = update_file_content(path, json.dumps(items, indent=2), old_sha, message)
     if r.status_code in (200, 201):
         return True, r
-    # Conflict -> merge and retry
     if r.status_code in (409, 422):
         latest_str, latest_sha, _ = get_file_content(path)
         try:
@@ -109,8 +109,8 @@ def optimistic_save(path, items, old_sha, message, id_key="id"):
     return False, r
 
 def mask_pii(text):
-    import re
-    if not text: return text
+    if not text:
+        return text
     text = re.sub(r'\b[\w\.-]+@[\w\.-]+\.\w{2,}\b', '[email masked]', text)
     text = re.sub(r'\b(?:\+?\d{1,3}[-.\s]?)?(?:\d{3}[-.\s]?){2}\d{4}\b', '[phone masked]', text)
     return text
@@ -141,7 +141,8 @@ def filter_items(items, keyword, fields, status=None):
         if status and it.get("status") != status:
             continue
         if not kw:
-            out.append(it); continue
+            out.append(it)
+            continue
         hay = []
         for f in fields:
             v = it.get(f, "")
@@ -358,35 +359,21 @@ with tab_public:
     t_open, t_completed, t_all = st.tabs(["Open", "Completed", "All"])
     st.text_input("Search tickets:", key="ticket_search_pub", placeholder="Type to search tickets...")
 
-   def render_ticket_list(data, view_prefix):
-    page_key = f"{view_prefix}_page"
-    if page_key not in st.session_state:
-        st.session_state[page_key] = 0
-    page_items, has_more_local = paginate_items(data, st.session_state[page_key], 5)
-    if page_items:
-        for ticket in page_items:
-            expanded = (deep_ticket_id == ticket["id"])
-            chip = "✅ Completed" if ticket["status"] == "Completed" else "🟡 In Process"
-            with st.expander(f"Ticket #{ticket['id']} • {chip} • {ticket['updated_at']} UTC", expanded=expanded):
-                st.markdown(f"**Query:**\n\n{ticket['query']}")
-                colb1, colb2, colb3, colb4 = st.columns([1,1,1,2])
-                with colb1:
-                    st.caption(f"Labels: {', '.join(ticket.get('labels', [])) or '—'}")
-                with colb2:
-                    st.caption(f"Priority: {ticket.get('priority','Medium')}")
-                with colb3:
-                    st.caption(f"Assignee: {ticket.get('assigned_to','—') or '—'}")
-                with colb4:
-                    if st.button("Copy link", key=f"{view_prefix}_tk_link_btn_{ticket['id']}"):
-                        set_ticket_param(ticket["id"])
-                        st.success("Link set in URL")
-                if ticket.get("replies"):
-                    st.markdown("**Admin Replies:**")
-                    for reply in ticket["replies"]:
-                        st.markdown(f"- {reply['message']} (at {reply['created_at']} UTC)")
-    else:
-        st.write("No tickets available.")
-    if has_more_local:
-        if st.button("Load more", key=f"{view_prefix}_load_more"):
-            st.session_state[page_key] += 1
-            st.experimental_rerun()
+    def render_ticket_list(data, view_prefix):
+        page_key = f"{view_prefix}_page"
+        if page_key not in st.session_state:
+            st.session_state[page_key] = 0
+        page_items, has_more_local = paginate_items(data, st.session_state[page_key], 5)
+        if page_items:
+            for ticket in page_items:
+                expanded = (deep_ticket_id == ticket["id"])
+                chip = "✅ Completed" if ticket["status"] == "Completed" else "🟡 In Process"
+                with st.expander(f"Ticket #{ticket['id']} • {chip} • {ticket['updated_at']} UTC", expanded=expanded):
+                    st.markdown(f"**Query:**\n\n{ticket['query']}")
+                    colb1, colb2, colb3, colb4 = st.columns([1,1,1,2])
+                    with colb1:
+                        st.caption(f"Labels: {', '.join(ticket.get('labels', [])) or '—'}")
+                    with colb2:
+                        st.caption(f"Priority: {ticket.get('priority','Medium')}")
+                    with colb3:
+                        st.caption(f"Assignee: {ticket.get('assigned_to','—')
